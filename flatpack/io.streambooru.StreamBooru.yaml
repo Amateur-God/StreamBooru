@@ -1,0 +1,30 @@
+app-id: io.streambooru.StreamBooru
+runtime: org.freedesktop.Platform
+runtime-version: "23.08"
+sdk: org.freedesktop.Sdk
+command: streambooru
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --device=all
+  - --share=network
+  - --filesystem=home
+
+modules:
+  - name: streambooru
+    buildsystem: simple
+    build-commands:
+      - npm ci
+      - npx electron-builder --linux dir --config electron-builder.yml
+      - install -Dm755 dist/linux-unpacked/streambooru /app/bin/streambooru || true
+      - |
+        if [ ! -f /app/bin/streambooru ]; then
+          # Fallback: symlink to electron binary if builder created a different name
+          install -d /app/bin
+          cp -r dist/linux-unpacked/* /app/bin/
+          ln -sf /app/bin/${FLATPAK_ID} /app/bin/streambooru || true
+        fi
+    sources:
+      - type: dir
+        path: ../

@@ -1,0 +1,192 @@
+name: Release (deb, exe, flatpak, tar.gz, AUR)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  APP_ID: io.streambooru.StreamBooru
+  APP_NAME: StreamBooru
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      owner: ${{ steps.meta.outputs.owner }}
+      repo: ${{ steps.meta.outputs.repo }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: |
+          REF="${GITHUB_REF##*/}"
+          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
+
+  linux-deb-and-tar:
+    needs: prep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install deps
+        run: npm ci
+      - name: Ensure electron-builder installed
+        run: npm i -D electron-builder@^24
+      - name: Build .deb and linux tar.gz
+        run: npx electron-builder --config electron-builder.yml --linux deb tar.gz
+      - name: Create README_INSTALL for tarballs
+        run: |
+          cp docs/INSTALL.md dist/INSTALL.md || true
+      - name: Collect artifacts
+        run: |
+          mkdir -p release-linux
+          shopt -s nullglob
+          cp dist/*.deb release-linux/ || true
+          cp dist/*.tar.gz release-linux/ || true
+          cp dist/INSTALL.md release-linux/ || true
+          ls -la release-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: release-linux
+
+  windows-exe:
+    needs: prep
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install deps
+        run: npm ci
+      - name: Ensure electron-builder installed
+        run: npm i -D electron-builder@^24
+      - name: Build NSIS .exe installer
+        run: npx electron-builder --config electron-builder.yml --win nsis
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p release-win
+          shopt -s nullglob
+          cp dist/*.exe release-win/ || true
+          cp docs/INSTALL.md release-win/INSTALL.md || true
+          ls -la release-win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: release-win
+
+  flatpak:
+    needs: prep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder elfutils
+          flatpak --version
+      - name: Build Flatpak
+        run: |
+          mkdir -p flatpak-build flatpak-repo
+          flatpak-builder --force-clean --user --install-deps-from=flathub flatpak-build flatpak/${{ env.APP_ID }}.yaml --repo=flatpak-repo
+          flatpak build-bundle flatpak-repo ${{ env.APP_NAME }}.flatpak ${{ env.APP_ID }} stable
+      - name: Collect artifacts
+        run: |
+          mkdir -p release-flatpak
+          cp ${{ env.APP_NAME }}.flatpak release-flatpak/
+          cp docs/INSTALL.md release-flatpak/INSTALL.md || true
+          ls -la release-flatpak
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: release-flatpak
+
+  create-release:
+    needs: [prep, linux-deb-and-tar, windows-exe, flatpak]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+      - name: List artifacts
+        run: find ./artifacts -type f -maxdepth 3 -print
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/linux/**
+            artifacts/windows/**
+            artifacts/flatpak/**
+
+  aur:
+    # Publishes to AUR when AUR secrets are present
+    if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' && secrets.AUR_USERNAME != '' && secrets.AUR_PACKAGE != '' }}
+    needs: [prep, create-release]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prep.outputs.version }}
+      OWNER:   ${{ needs.prep.outputs.owner }}
+      REPO:    ${{ needs.prep.outputs.repo }}
+      PKGNAME: ${{ secrets.AUR_PACKAGE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate PKGBUILD from template
+        run: |
+          mkdir -p aur-out
+          sed \
+            -e "s|@@PKGNAME@@|${PKGNAME}|g" \
+            -e "s|@@VERSION@@|${VERSION}|g" \
+            -e "s|@@OWNER@@|${OWNER}|g" \
+            -e "s|@@REPO@@|${REPO}|g" \
+            aur/PKGBUILD.in > aur-out/PKGBUILD
+
+      - name: Compute sha256sums for source tarball
+        run: |
+          SRC_URL="https://github.com/${OWNER}/${REPO}/archive/refs/tags/v${VERSION}.tar.gz"
+          curl -L "$SRC_URL" -o "aur-out/${PKGNAME}-${VERSION}.tar.gz"
+          SHA=$(sha256sum "aur-out/${PKGNAME}-${VERSION}.tar.gz" | awk '{print $1}')
+          # Patch PKGBUILD with sha256sums
+          sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
+
+      - name: Create .SRCINFO
+        run: |
+          sudo apt-get update && sudo apt-get install -y pacman-tools || true
+          docker run --rm -v "$PWD/aur-out":/pkg -w /pkg archlinux:base-devel bash -lc "
+            pacman -Sy --noconfirm pacman-contrib base-devel git
+            makepkg --printsrcinfo > .SRCINFO
+          "
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          PACKAGE_NAME: ${{ secrets.AUR_PACKAGE }}
+        with:
+          pkgname: ${{ secrets.AUR_PACKAGE }}
+          pkgbuild: aur-out/PKGBUILD
+          srcinfo: aur-out/.SRCINFO
+          commit_username: "github-actions[bot]"
+          commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
+          ssh_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

@@ -1,0 +1,19 @@
+{
+  "name": "streambooru",
+  "version": "0.2.1",
+  "description": "StreamBooru — Electron app to browse multiple booru sites with New and Popular feeds, merged across sources.",
+  "main": "electron/main.js",
+  "author": "Amateur-God",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {}
+}

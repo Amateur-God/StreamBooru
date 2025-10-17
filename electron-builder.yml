@@ -1,0 +1,43 @@
+appId: io.streambooru.StreamBooru
+productName: StreamBooru
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - "electron/**"
+  - "renderer/**"
+  - "src/**"
+  - "package.json"
+  - "!node_modules/.cache"
+
+asar: true
+
+linux:
+  category: Utility
+  target:
+    - deb
+    - tar.gz
+
+deb:
+  depends:
+    - libgtk-3-0
+    - libnss3
+    - libasound2
+    - libxss1
+    - libxtst6
+  synopsis: StreamBooru
+  description: "StreamBooru - multi-site booru browser (Electron)."
+
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  artifactName: "${productName}-Setup-${version}.${ext}"
+
+extraMetadata:
+  name: streambooru

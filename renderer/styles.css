@@ -1,0 +1,309 @@
+:root {
+  --bg: #0f1115;
+  --panel: #151822;
+  --text: #e6e6e6;
+  --muted: #a9b0c0;
+  --accent: #6aa2ff;
+  --border: #24293a;
+  --bad: #ff6b6b;
+  --good: #52d273;
+  --warn: #f7c948;
+  --topbar-h: 64px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  padding-top: var(--topbar-h);
+}
+
+/* ========== Fixed Header (tabs + search + manage) ========== */
+.topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: var(--topbar-h);
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+.topbar .left { justify-self: start; }
+.topbar .center { justify-self: center; display: flex; gap: 12px; align-items: center; }
+.topbar .right { justify-self: end; }
+.topbar h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); }
+
+.tabs { display: flex; gap: 8px; }
+.tab {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.tab.active { background: var(--accent); color: #0b0f1a; border-color: var(--accent); }
+
+.ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* Search */
+.search { display: flex; gap: 6px; align-items: center; }
+.search input {
+  width: 360px; padding: 6px 10px;
+  background: #101425; border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text);
+  outline: none;
+}
+.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(106,162,255,0.15); }
+.search button {
+  padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: transparent; color: var(--text); cursor: pointer;
+}
+.search #tag-clear-btn { width: 36px; text-align: center; }
+
+/* ========== Feed Grid / Cards ========== */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  min-height: 180px;
+}
+.card .thumb {
+  position: relative;
+  aspect-ratio: 1/1;
+  background: #0b0d12;
+  overflow: hidden;
+}
+.card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card .meta {
+  font-size: 12px; color: var(--muted);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px;
+}
+.card .meta .site { color: var(--accent); }
+.card .actions {
+  display: flex; gap: 8px;
+  padding: 8px; border-top: 1px solid var(--border);
+}
+.card .actions button {
+  flex: 1; padding: 6px 8px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--text);
+  cursor: pointer;
+}
+
+.loading { text-align: center; padding: 16px; color: var(--muted); }
+.hidden { display: none; }
+
+/* ========== Modal (Manage Sites) ========== */
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal.hidden { display: none !important; }
+
+.modal .panel {
+  width: min(1040px, 96vw);
+  max-height: 84vh;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+}
+.modal .panel > h2 {
+  position: sticky; top: 0;
+  margin: 0; padding: 14px 16px;
+  background: #14182a;
+  border-bottom: 1px solid var(--border);
+}
+.modal .panel > .content-scroll {
+  overflow: auto; padding: 14px 16px;
+}
+.modal .panel > .btns {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.modal .panel > .btns button {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: #101425; color: var(--text); cursor: pointer;
+}
+
+/* ========== Site Manager Cards ========== */
+.site-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #121524;
+  display: grid; gap: 10px;
+}
+.site-card .row { display: grid; gap: 8px; }
+.site-card .row.header {
+  grid-template-columns: 1.3fr 2.2fr 1.1fr 1.1fr auto;
+  align-items: center;
+}
+.site-card .row.line { grid-template-columns: 2fr 1fr; }
+.site-card input, .site-card select, .site-card button.small {
+  width: 100%; padding: 8px 10px;
+  background: #101425; border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text);
+}
+.site-card .auth {
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 8px; margin-top: 6px; padding: 8px;
+  border: 1px dashed var(--border); border-radius: 8px;
+}
+.site-card .hint { font-size: 12px; color: var(--muted); }
+
+/* Compact/tighter variant */
+.site-card.compact {
+  padding: 10px;
+  border-radius: 10px;
+  background: #14182a;
+  border: 1px solid var(--border);
+}
+.site-card.compact .row.header {
+  grid-template-columns: 1.1fr 2fr 1fr 1fr auto;
+  gap: 8px;
+}
+.site-card.compact .row.line {
+  grid-template-columns: 2fr 1fr;
+}
+.site-card.compact input,
+.site-card.compact select {
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: #101425;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+/* Actions row — ensure on top, and make action links look like buttons */
+.site-card .actions-row {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* “Link” buttons styled as compact buttons */
+.link-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #101425;
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.2;
+  user-select: none;
+}
+.link-btn:hover {
+  background: #0d1222;
+  border-color: #2e3650;
+}
+.link-btn:active { transform: translateY(1px); }
+.link-btn:focus-visible {
+  outline: 2px solid rgba(106,162,255,0.35);
+  outline-offset: 2px;
+}
+/* Optional accent style for emphasis (e.g., Test) */
+.link-btn.accent {
+  background: rgba(106,162,255,0.10);
+  border-color: rgba(106,162,255,0.35);
+  color: #d8e4ff;
+}
+.link-btn.accent:hover { background: rgba(106,162,255,0.16); }
+
+/* Small utility buttons */
+.btn-small {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: #101425;
+  color: var(--text);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.btn-small.danger { border-color: #6b2a2a; }
+.add-row { margin-top: 6px; }
+
+/* Status badges */
+.badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+}
+.badge.ok { color: var(--good); border-color: rgba(82,210,115,0.35); }
+.badge.err { color: var(--bad); border-color: rgba(255,107,107,0.35); }
+.badge.warn { color: var(--warn); border-color: rgba(247,201,72,0.35); }
+.badge.muted { color: var(--muted); }
+
+/* Legacy test-status (kept for compatibility) */
+.test-status { font-size: 12px; color: var(--muted); }
+.test-status.ok { color: var(--good); }
+.test-status.err { color: var(--bad); }
+
+/* ========== Lightbox ========== */
+.lightbox {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.85);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2000;
+}
+.lightbox.hidden { display: none !important; }
+.lightbox .content {
+  position: relative; max-width: 96vw; max-height: 92vh;
+  display: flex; flex-direction: column; gap: 8px; align-items: center;
+}
+.lightbox img {
+  max-width: 96vw; max-height: 86vh;
+  object-fit: contain; background: #000; border-radius: 6px;
+}
+.lightbox .toolbar {
+  display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+}
+.lightbox .toolbar button {
+  padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: #1a1f2f;
+  color: var(--text); cursor: pointer;
+}
+.lightbox .close {
+  position: absolute; top: -36px; right: -4px;
+  background: #1a1f2f; border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; cursor: pointer;
+}

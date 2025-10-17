@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>StreamBooru</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https: http:;">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="left">
+      <h1>StreamBooru</h1>
+    </div>
+
+    <div class="center">
+      <div class="tabs">
+        <button id="tab-new" class="tab active" data-view="new">New</button>
+        <button id="tab-popular" class="tab" data-view="popular">Popular</button>
+        <button id="tab-search" class="tab" data-view="search">Search</button>
+        <button id="tab-faves" class="tab" data-view="faves">Favorites</button>
+      </div>
+
+      <form id="search-form" class="search" autocomplete="off">
+        <input id="tag-search" type="text" placeholder="Search tags (space-separated, e.g., 1girl blue_hair)" />
+        <button id="tag-search-btn" type="submit">Search</button>
+        <button id="tag-clear-btn" type="button" title="Clear search">✕</button>
+      </form>
+    </div>
+
+    <div class="right">
+      <button id="btn-manage-sites" class="ghost">Manage Sites</button>
+    </div>
+  </header>
+
+  <main id="feed" class="grid"></main>
+
+  <div id="loading" class="loading hidden">Loading…</div>
+
+  <div id="site-manager" class="modal hidden" aria-hidden="true" tabindex="-1"></div>
+  <div id="lightbox" class="lightbox hidden" aria-hidden="true"></div>
+
+  <script src="./components/siteManager.js"></script>
+  <script src="./components/postCard.js"></script>
+  <script src="./components/lightbox.js"></script>
+  <script src="./renderer.js"></script>
+</body>
+</html>
