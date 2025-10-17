@@ -47,8 +47,7 @@ jobs:
       - name: Build .deb and linux tar.gz
         run: npx electron-builder --config electron-builder.yml --linux deb tar.gz
       - name: Create README_INSTALL for tarballs
-        run: |
-          cp docs/INSTALL.md dist/INSTALL.md || true
+        run: cp docs/INSTALL.md dist/INSTALL.md || true
       - name: Collect artifacts
         run: |
           mkdir -p release-linux
@@ -139,8 +138,6 @@ jobs:
             artifacts/flatpak/**
 
   aur:
-    # Publishes to AUR when AUR secrets are present
-    if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' && secrets.AUR_USERNAME != '' && secrets.AUR_PACKAGE != '' }}
     needs: [prep, create-release]
     runs-on: ubuntu-latest
     env:
@@ -148,10 +145,28 @@ jobs:
       OWNER:   ${{ needs.prep.outputs.owner }}
       REPO:    ${{ needs.prep.outputs.repo }}
       PKGNAME: ${{ secrets.AUR_PACKAGE }}
+      # Expose secrets to this job's environment for the check step
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+      AUR_PACKAGE: ${{ secrets.AUR_PACKAGE }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check AUR secrets
+        id: check
+        shell: bash
+        run: |
+          publish=true
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ] || [ -z "${AUR_USERNAME}" ] || [ -z "${AUR_PACKAGE}" ]; then
+            publish=false
+          fi
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          if [ "${publish}" != "true" ]; then
+            echo "AUR secrets missing; skipping AUR publish." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Generate PKGBUILD from template
+        if: steps.check.outputs.publish == 'true'
         run: |
           mkdir -p aur-out
           sed \
@@ -162,22 +177,23 @@ jobs:
             aur/PKGBUILD.in > aur-out/PKGBUILD
 
       - name: Compute sha256sums for source tarball
+        if: steps.check.outputs.publish == 'true'
         run: |
           SRC_URL="https://github.com/${OWNER}/${REPO}/archive/refs/tags/v${VERSION}.tar.gz"
           curl -L "$SRC_URL" -o "aur-out/${PKGNAME}-${VERSION}.tar.gz"
           SHA=$(sha256sum "aur-out/${PKGNAME}-${VERSION}.tar.gz" | awk '{print $1}')
-          # Patch PKGBUILD with sha256sums
           sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
 
       - name: Create .SRCINFO
+        if: steps.check.outputs.publish == 'true'
         run: |
-          sudo apt-get update && sudo apt-get install -y pacman-tools || true
           docker run --rm -v "$PWD/aur-out":/pkg -w /pkg archlinux:base-devel bash -lc "
-            pacman -Sy --noconfirm pacman-contrib base-devel git
+            pacman -Sy --noconfirm pacman-contrib base-devel git >/dev/null
             makepkg --printsrcinfo > .SRCINFO
           "
 
       - name: Publish to AUR
+        if: steps.check.outputs.publish == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
