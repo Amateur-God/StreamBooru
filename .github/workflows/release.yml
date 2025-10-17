@@ -218,6 +218,7 @@ jobs:
             -w /pkg \
             archlinux:base-devel \
             bash -lc 'makepkg --printsrcinfo > .SRCINFO'
+          ls -la aur-out
 
       - name: Publish to AUR
         if: steps.check.outputs.publish == 'true'
@@ -226,7 +227,7 @@ jobs:
           pkgname: ${{ secrets.AUR_PACKAGE }}
           pkgbuild: aur-out/PKGBUILD
           assets: |
-            aur-out/.SRCINFO:.SRCINFO
+            aur-out/.SRCINFO
           commit_username: "github-actions[bot]"
           commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
