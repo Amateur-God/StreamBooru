@@ -222,14 +222,12 @@ jobs:
       - name: Publish to AUR
         if: steps.check.outputs.publish == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
-        env:
-          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
-          PACKAGE_NAME: ${{ secrets.AUR_PACKAGE }}
         with:
           pkgname: ${{ secrets.AUR_PACKAGE }}
           pkgbuild: aur-out/PKGBUILD
-          srcinfo: aur-out/.SRCINFO
+          assets: |
+            aur-out/.SRCINFO:.SRCINFO
           commit_username: "github-actions[bot]"
           commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
-          ssh_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          ssh_keyscan_types: rsa,ecdsa,ed25519
