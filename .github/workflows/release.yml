@@ -176,6 +176,7 @@ jobs:
       AUR_PACKAGE: ${{ secrets.AUR_PACKAGE }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Check AUR secrets
         id: check
         shell: bash
@@ -188,6 +189,7 @@ jobs:
           if [ "${publish}" != "true" ]; then
             echo "AUR secrets missing; skipping AUR publish." >> "$GITHUB_STEP_SUMMARY"
           fi
+
       - name: Generate PKGBUILD from template
         if: steps.check.outputs.publish == 'true'
         run: |
@@ -197,6 +199,7 @@ jobs:
               -e "s|@@OWNER@@|${OWNER}|g" \
               -e "s|@@REPO@@|${REPO}|g" \
               aur/PKGBUILD.in > aur-out/PKGBUILD
+
       - name: Compute sha256sums for source tarball
         if: steps.check.outputs.publish == 'true'
         run: |
@@ -204,13 +207,21 @@ jobs:
           curl -L "$SRC_URL" -o "aur-out/${PKGNAME}-${VERSION}.tar.gz"
           SHA=$(sha256sum "aur-out/${PKGNAME}-${VERSION}.tar.gz" | awk '{print $1}')
           sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
+
       - name: Create .SRCINFO
         if: steps.check.outputs.publish == 'true'
         run: |
-          docker run --rm -v "$PWD/aur-out":/pkg -w /pkg archlinux:base-devel bash -lc "
-            pacman -Sy --noconfirm pacman-contrib base-devel git >/dev/null
-            makepkg --printsrcinfo > .SRCINFO
-          "
+          docker run --rm \
+            -v "$PWD/aur-out":/pkg \
+            -w /pkg \
+            archlinux:base-devel \
+            bash -lc '
+              set -e
+              # Run makepkg as non-root to satisfy safety checks
+              su nobody -s /bin/bash -c "HOME=/tmp makepkg --printsrcinfo > /tmp/.SRCINFO"
+              mv /tmp/.SRCINFO /pkg/.SRCINFO
+            '
+
       - name: Publish to AUR
         if: steps.check.outputs.publish == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
