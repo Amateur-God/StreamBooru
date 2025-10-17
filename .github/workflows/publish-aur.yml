@@ -1,0 +1,98 @@
+name: Publish AUR (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g., v0.2.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+      AUR_PACKAGE: ${{ secrets.AUR_PACKAGE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Parse metadata
+        id: meta
+        run: |
+          REF="${{ inputs.tag }}"
+          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Check AUR secrets
+        id: check
+        shell: bash
+        run: |
+          publish=true
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ] || [ -z "${AUR_USERNAME}" ] || [ -z "${AUR_PACKAGE}" ]; then
+            publish=false
+          fi
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          if [ "${publish}" != "true" ]; then
+            echo "AUR secrets missing; skipping AUR publish." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Generate PKGBUILD from template
+        if: steps.check.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          OWNER:   ${{ steps.meta.outputs.owner }}
+          REPO:    ${{ steps.meta.outputs.repo }}
+          PKGNAME: ${{ secrets.AUR_PACKAGE }}
+        run: |
+          mkdir -p aur-out
+          sed -e "s|@@PKGNAME@@|${PKGNAME}|g" \
+              -e "s|@@VERSION@@|${VERSION}|g" \
+              -e "s|@@OWNER@@|${OWNER}|g" \
+              -e "s|@@REPO@@|${REPO}|g" \
+              aur/PKGBUILD.in > aur-out/PKGBUILD
+
+      - name: Compute sha256sums for source tarball
+        if: steps.check.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          OWNER:   ${{ steps.meta.outputs.owner }}
+          REPO:    ${{ steps.meta.outputs.repo }}
+          PKGNAME: ${{ secrets.AUR_PACKAGE }}
+        run: |
+          SRC_URL="https://github.com/${OWNER}/${REPO}/archive/refs/tags/v${VERSION}.tar.gz"
+          curl -L "$SRC_URL" -o "aur-out/${PKGNAME}-${VERSION}.tar.gz"
+          SHA=$(sha256sum "aur-out/${PKGNAME}-${VERSION}.tar.gz" | awk '{print $1}')
+          sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
+
+      - name: Create .SRCINFO
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD/aur-out":/pkg \
+            -w /pkg \
+            archlinux:base-devel \
+            bash -lc 'makepkg --printsrcinfo > .SRCINFO'
+
+      - name: Publish to AUR
+        if: steps.check.outputs.publish == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+        with:
+          pkgname: ${{ secrets.AUR_PACKAGE }}
+          pkgbuild: aur-out/PKGBUILD
+          srcinfo: aur-out/.SRCINFO
+          commit_username: "github-actions[bot]"
+          commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
+          ssh_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

@@ -212,15 +212,12 @@ jobs:
         if: steps.check.outputs.publish == 'true'
         run: |
           docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
             -v "$PWD/aur-out":/pkg \
             -w /pkg \
             archlinux:base-devel \
-            bash -lc '
-              set -e
-              # Run makepkg as non-root to satisfy safety checks
-              su nobody -s /bin/bash -c "HOME=/tmp makepkg --printsrcinfo > /tmp/.SRCINFO"
-              mv /tmp/.SRCINFO /pkg/.SRCINFO
-            '
+            bash -lc 'makepkg --printsrcinfo > .SRCINFO'
 
       - name: Publish to AUR
         if: steps.check.outputs.publish == 'true'
