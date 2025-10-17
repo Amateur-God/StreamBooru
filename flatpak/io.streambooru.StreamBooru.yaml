@@ -2,6 +2,9 @@ app-id: io.streambooru.StreamBooru
 runtime: org.freedesktop.Platform
 runtime-version: "23.08"
 sdk: org.freedesktop.Sdk
+runtime-extensions:
+  - org.freedesktop.Sdk.Extension.node20
+
 command: streambooru
 finish-args:
   - --share=ipc
@@ -20,10 +23,11 @@ modules:
       - install -Dm755 dist/linux-unpacked/streambooru /app/bin/streambooru || true
       - |
         if [ ! -f /app/bin/streambooru ]; then
-          # Fallback: symlink to electron binary if builder created a different name
           install -d /app/bin
           cp -r dist/linux-unpacked/* /app/bin/
-          ln -sf /app/bin/${FLATPAK_ID} /app/bin/streambooru || true
+          # fallback: try to find the binary name
+          BINARY="$(find dist/linux-unpacked -maxdepth 1 -type f -perm -111 | head -n1 || true)"
+          [ -n "$BINARY" ] && install -Dm755 "$BINARY" /app/bin/streambooru || true
         fi
     sources:
       - type: dir
