@@ -5,7 +5,7 @@
   "main": "electron/main.js",
   "author": {
     "name": "Amateur-God",
-    "email": "mrhowe95@gmail.com",
+    "email": "mrhowe95@gmail.com"
   },
   "license": "GPLv3",
   "scripts": {
