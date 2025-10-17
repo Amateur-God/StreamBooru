@@ -44,8 +44,8 @@ jobs:
         run: npm ci
       - name: Ensure electron-builder installed
         run: npm i -D electron-builder@^24
-      - name: Build .deb and linux tar.gz
-        run: npx electron-builder --config electron-builder.yml --linux deb tar.gz
+      - name: Build .deb and linux tar.gz (no publish)
+        run: npx electron-builder --publish=never --config electron-builder.yml --linux deb tar.gz
       - name: Create README_INSTALL for tarballs
         run: cp docs/INSTALL.md dist/INSTALL.md || true
       - name: Collect artifacts
@@ -75,8 +75,8 @@ jobs:
         run: npm ci
       - name: Ensure electron-builder installed
         run: npm i -D electron-builder@^24
-      - name: Build NSIS .exe installer
-        run: npx electron-builder --config electron-builder.yml --win nsis
+      - name: Build NSIS .exe installer (no publish)
+        run: npx electron-builder --publish=never --config electron-builder.yml --win nsis
       - name: Collect artifacts
         shell: bash
         run: |
@@ -145,7 +145,6 @@ jobs:
       OWNER:   ${{ needs.prep.outputs.owner }}
       REPO:    ${{ needs.prep.outputs.repo }}
       PKGNAME: ${{ secrets.AUR_PACKAGE }}
-      # Expose secrets to this job's environment for the check step
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
       AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
       AUR_PACKAGE: ${{ secrets.AUR_PACKAGE }}

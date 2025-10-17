@@ -3,8 +3,11 @@
   "version": "0.2.1",
   "description": "StreamBooru — Electron app to browse multiple booru sites with New and Popular feeds, merged across sources.",
   "main": "electron/main.js",
-  "author": "Amateur-God",
-  "license": "MIT",
+  "author": {
+    "name": "Amateur-God",
+    "email": "mrhowe95@gmail.com",
+  },
+  "license": "GPLv3",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
