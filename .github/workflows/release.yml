@@ -169,16 +169,7 @@ jobs:
         working-directory: android
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        working-directory: android
-        run: ./gradlew assembleDebug
-
-      - name: Upload Debug APK (artifact)
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-debug
-          path: android/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
+      # No Debug build in release workflow
 
       - name: Decode Keystore (PKCS#12)
         run: |
@@ -201,7 +192,6 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
-            chmod +x gradlew
             ./gradlew clean
             ./gradlew \
               bundleRelease \
@@ -215,19 +205,39 @@ jobs:
             echo "No keystore secret; skipping signed release build"
           fi
 
-      - name: Collect Android artifacts
+      - name: Prepare Android artifacts (rename APK; keep AAB out of release)
         run: |
-          mkdir -p release-android
-          shopt -s nullglob
-          cp android/app/build/outputs/bundle/release/*.aab release-android/ || true
-          cp android/app/build/outputs/apk/release/*.apk release-android/ || true
-          cp android/app/build/outputs/apk/debug/*.apk  release-android/ || true
-          ls -la release-android
+          set -e
+          mkdir -p out-apk out-aab
+          # Rename APK -> streambooru.apk (for GitHub Release)
+          if compgen -G "android/app/build/outputs/apk/release/*.apk" > /dev/null; then
+            cp android/app/build/outputs/apk/release/*.apk out-apk/streambooru.apk
+            ls -la out-apk || true
+          else
+            echo "No release APK found."
+          fi
+          # Keep AAB only as Actions artifact (not attached to Release)
+          if compgen -G "android/app/build/outputs/bundle/release/*.aab" > /dev/null; then
+            cp android/app/build/outputs/bundle/release/*.aab out-aab/ # you can rename if you prefer
+            ls -la out-aab || true
+          else
+            echo "No release AAB found."
+          fi
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK artifact (for Release attachment)
+        uses: actions/upload-artifact@v4
         with:
-          name: android
-          path: release-android
+          name: android-apk
+          path: out-apk/streambooru.apk
+          if-no-files-found: error
+
+      - name: Upload AAB artifact (private to Actions; not attached to Release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aab
+          path: out-aab/*.aab
+          if-no-files-found: ignore
+          retention-days: 14
 
   create-release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -294,7 +304,7 @@ jobs:
             artifacts/linux/**
             artifacts/windows/**
             artifacts/flatpak/**
-            artifacts/android/**
+            artifacts/android-apk/streambooru.apk
 
       - name: Create/Update GitHub Release (auto-generated notes)
         if: steps.extract.outputs.found != 'true'
@@ -310,7 +320,7 @@ jobs:
             artifacts/linux/**
             artifacts/windows/**
             artifacts/flatpak/**
-            artifacts/android/**
+            artifacts/android-apk/streambooru.apk
 
   aur:
     if: startsWith(github.ref, 'refs/tags/')
