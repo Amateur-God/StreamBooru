@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 
-## [v0.2.2] — 2025-10-18
+## [v0.3.0] — 2025-10-18
 
 ### Added
 - New engines
@@ -59,7 +59,7 @@ The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 - Lightbox video playback may not work on some Linux builds lacking proprietary codecs (H.264/AAC). Use “Open Media” or replace Electron’s `libffmpeg.so` with the distro’s `chromium-codecs-ffmpeg-extra` variant.
 - Danbooru video thumbnails may look softer (site only serves small static previews for videos).
 
-[v0.2.2]: https://github.com/Amateur-God/StreamBooru/releases/tag/v0.2.2
+[v0.3.0]: https://github.com/Amateur-God/StreamBooru/releases/tag/v0.3.0
 
 ## [v0.2.1] — 2025-10-18
 

@@ -1,9 +1,12 @@
-(function () {
-  function openExternal(url) {
+(() => {
+  const openExternal = (url) => {
     if (url) window.api.openExternal(url);
-  }
+  };
 
-  function buildActions(post, idx) {
+  // Prefer larger sample/large image for sharp cards; preview last.
+  const pickThumb = (post) => post.sample_url || post.file_url || post.preview_url || '';
+
+  const buildActions = (post, idx) => {
     const wrap = document.createElement('div');
     wrap.className = 'actions';
 
@@ -43,9 +46,9 @@
     wrap.appendChild(btnFav);
     wrap.appendChild(btnDownload);
     return wrap;
-  }
+  };
 
-  window.PostCard = function (post, index = 0) {
+  window.PostCard = (post, index = 0) => {
     const card = document.createElement('div');
     card.className = 'card';
     card.dataset.key = `${post?.site?.baseUrl || ''}#${post?.id}`;
@@ -55,8 +58,17 @@
 
     const img = document.createElement('img');
     img.loading = 'lazy';
+    img.decoding = 'async';
     img.alt = String(post?.id ?? '');
-    img.src = post.preview_url || post.sample_url || post.file_url || '';
+    const thumbUrl = pickThumb(post);
+    img.src = thumbUrl;
+
+    // Provide a simple srcset so the browser can pick a sharper file when available
+    const candidates = [];
+    if (post.sample_url) candidates.push(`${post.sample_url} 1x`);
+    if (post.file_url && post.file_url !== post.sample_url) candidates.push(`${post.file_url} 2x`);
+    if (candidates.length) img.srcset = candidates.join(', ');
+
     img.addEventListener('click', () => {
       if (window.openLightbox) window.openLightbox(post);
     });
@@ -65,13 +77,18 @@
     const meta = document.createElement('div');
     meta.className = 'meta';
     const left = document.createElement('div');
-    left.textContent = `♡ ${isFinite(post.favorites) ? post.favorites : 0} ★ ${isFinite(post.score) ? post.score : 0}`;
+    const favs = Number.isFinite(post.favorites) ? post.favorites : 0;
+    const score = Number.isFinite(post.score) ? post.score : 0;
+    left.textContent = `♡ ${favs} ★ ${score}`;
     const right = document.createElement('div');
     const siteA = document.createElement('a');
     siteA.href = '#';
     siteA.className = 'site';
     siteA.textContent = post?.site?.name || post?.site?.type || 'site';
-    siteA.addEventListener('click', (e)=>{ e.preventDefault(); if (post.post_url) openExternal(post.post_url); });
+    siteA.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (post.post_url) openExternal(post.post_url);
+    });
     right.appendChild(siteA);
     meta.appendChild(left);
     meta.appendChild(right);

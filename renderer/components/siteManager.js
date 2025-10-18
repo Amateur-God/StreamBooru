@@ -64,7 +64,7 @@
     return b;
   };
 
-  function msToClock(ms) {
+  const msToClock = function(ms) {
     if (!Number.isFinite(ms) || ms <= 0) return '';
     const s = Math.round(ms / 1000);
     const m = Math.floor(s / 60);
@@ -75,9 +75,9 @@
       return `${h}h ${mm}m`;
     }
     return `${m}m ${r}s`;
-  }
+  };
 
-  function fmtInfo(x) {
+  const fmtInfo = function(x) {
     if (x == null) return '';
     // If adapters return a structured object, show a friendly summary
     if (typeof x === 'object') {
@@ -92,7 +92,7 @@
       try { return JSON.stringify(x); } catch { return String(x); }
     }
     return String(x);
-  }
+  };
 
   const siteCard = function (site, idx, onChange, onDelete, onTest) {
     const s = {

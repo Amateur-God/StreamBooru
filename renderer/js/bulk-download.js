@@ -2,14 +2,13 @@
   // A getter your view can register to supply the current tab's posts
   let getCurrentPosts = null;
 
-  // Call this from your view code when you load/render results:
   //   window.registerResultsProvider(() => currentPostsArray);
   window.registerResultsProvider = function (fn) {
     if (typeof fn === 'function') getCurrentPosts = fn;
   };
 
   // Map a post object to a downloadable item
-  function toDownloadItem(post, i) {
+  const toDownloadItem = function(post, i) {
     // Prefer the original file if present, fallback to sample/preview
     const url = post?.file_url || post?.sample_url || post?.preview_url || '';
     if (!url) return null;
@@ -30,9 +29,9 @@
       siteName: post?.site?.name || post?.site?.baseUrl || 'unknown',
       fileName
     };
-  }
+  };
 
-  async function onDownloadAllClick() {
+  const onDownloadAllClick = async function() {
     try {
       if (!getCurrentPosts) {
         alert('No results are loaded yet.');
@@ -69,7 +68,7 @@
       console.error('Download all error:', e);
       alert(`Download error: ${e?.message || e}`);
     }
-  }
+  };
 
   const btn = document.getElementById('btnDownloadAll');
   if (btn) btn.addEventListener('click', onDownloadAllClick);

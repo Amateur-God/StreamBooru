@@ -13,11 +13,10 @@ class DerpibooruAdapter {
       : rating === 'questionable' ? 'questionable'
       : rating === 'explicit' ? 'explicit'
       : ''; // 'any' => no rating token
-    const parts = [rt, site.tags || '', extra || '']
+    return [rt, site.tags || '', extra || '']
       .filter(Boolean)
       .join(' ')
       .trim();
-    return parts;
   }
 
   #norm(site, img) {

@@ -154,65 +154,64 @@ jobs:
       - name: List artifacts (some may be missing if a job failed)
         run: find ./artifacts -type f -maxdepth 3 -print || true
 
-      - name: Extract release notes from CHANGELOG.md (robust heading match)
-        id: gen_notes
+      - name: Setup Node (for extractor)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Extract release notes from CHANGELOG.md
+        id: extract
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"     # e.g., v0.2.1
-          VER="${TAG#v}"               # 0.2.1
-          FILES=("CHANGELOG.md" "docs/CHANGELOG.md")
-          OUT="RELEASE_NOTES.md"
-          found=false
-
-          for f in "${FILES[@]}"; do
-            if [[ -f "$f" ]]; then
-              # Match any '##' heading that contains the version in common forms:
-              # "## v0.2.1", "## [v0.2.1]", "## 0.2.1", "## [0.2.1]" (date text allowed after).
-              start_line=$(grep -nE "^##[[:space:]].*[\[\(]?v?${VER}[\]\)]?([[:space:]]|$|[[:punct:]].*)" -m1 "$f" | cut -d: -f1 || true)
-              if [[ -n "${start_line:-}" ]]; then
-                tail_start=$((start_line + 1))
-                next_rel=$(tail -n +"$tail_start" "$f" | grep -nE "^##[[:space:]]" -m1 | cut -d: -f1 || true)
-                if [[ -n "${next_rel:-}" ]]; then
-                  end_line=$((tail_start + next_rel - 2))
-                else
-                  end_line=$(wc -l < "$f")
-                fi
-                sed -n "${tail_start},${end_line}p" "$f" > "$OUT"
-                if [[ -s "$OUT" ]]; then
-                  echo "has_notes=true" >> "$GITHUB_OUTPUT"
-                  echo "notes_path=$OUT" >> "$GITHUB_OUTPUT"
-                  found=true
-                  break
-                fi
-              fi
-            fi
-          done
-
-          if [[ "$found" != "true" ]]; then
-            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          TAG="${GITHUB_REF_NAME}"
+          # Try root CHANGELOG.md; if not found or no section, try docs/CHANGELOG.md
+          node ./scripts/extract-changelog.mjs "$TAG" "./CHANGELOG.md" "./CHANGELOG_RELEASE.md" || true
+          if [ ! -s "./CHANGELOG_RELEASE.md" ] && [ -f "./docs/CHANGELOG.md" ]; then
+            node ./scripts/extract-changelog.mjs "$TAG" "./docs/CHANGELOG.md" "./CHANGELOG_RELEASE.md" || true
           fi
 
-      - name: Create GitHub Release (with CHANGELOG body)
-        if: steps.gen_notes.outputs.has_notes == 'true'
+          if [ -s "./CHANGELOG_RELEASE.md" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "notes_path=CHANGELOG_RELEASE.md" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload extracted notes (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog-extract-${{ github.ref_name }}
+          path: CHANGELOG_RELEASE.md
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Create/Update GitHub Release (CHANGELOG body)
+        if: steps.extract.outputs.found == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body_path: ${{ steps.gen_notes.outputs.notes_path }}
+          body_path: ${{ steps.extract.outputs.notes_path }}
+          generate_release_notes: false
+          make_latest: true
+          allow_updates: true
           fail_on_unmatched_files: false
           files: |
             artifacts/linux/**
             artifacts/windows/**
             artifacts/flatpak/**
 
-      - name: Create GitHub Release (auto-generated notes)
-        if: steps.gen_notes.outputs.has_notes != 'true'
+      - name: Create/Update GitHub Release (auto-generated notes)
+        if: steps.extract.outputs.found != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          make_latest: true
+          allow_updates: true
           fail_on_unmatched_files: false
           files: |
             artifacts/linux/**
