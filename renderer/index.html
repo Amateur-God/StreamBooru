@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8" />
   <title>StreamBooru</title>
-  <!-- Allow media (videos/audio) from https/http/data/blob alongside images -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https: http:;">
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -29,6 +28,7 @@
     </div>
 
     <div class="right">
+      <button id="btn-download-all" class="accent" title="Left-click to download all. Right-click or Shift/Alt+click for options.">Download All</button>
       <button id="btn-manage-sites" class="ghost">Manage Sites</button>
     </div>
   </header>
@@ -39,6 +39,27 @@
 
   <div id="site-manager" class="modal hidden" aria-hidden="true" tabindex="-1"></div>
   <div id="lightbox" class="lightbox hidden" aria-hidden="true"></div>
+
+  <!-- Download options popover (hidden by default) -->
+  <div id="download-options" class="popover hidden" role="dialog" aria-modal="true" aria-label="Download options">
+    <div class="pop-row">
+      <label for="name-template" class="pop-label">Name format</label>
+      <select id="name-template" class="pop-control" title="File name format">
+        <option value="{site}-{id}">site-id</option>
+        <option value="{site}-{score}-{artist}-{copyright}-{character}-{id}">site-score-artist-copyright-character-id</option>
+        <option value="{site}-{id}-{original_name}">site-id-original</option>
+        <option value="{site}-{id}-{rating}">site-id-rating</option>
+        <option value="{site}-{id}-{width}x{height}">site-id-size</option>
+        <option value="__custom__">Custom…</option>
+      </select>
+    </div>
+    <div class="pop-hint">
+      Tokens: {site} {site_type} {id} {score} {favorites} {rating} {width} {height} {index} {ext} {original_name} {created} {created_yyyy} {created_mm} {created_dd} {created_hhmm} {artist} {copyright} {character}
+    </div>
+    <div class="pop-actions">
+      <button id="dlopt-close" class="btn-small">Close</button>
+    </div>
+  </div>
 
   <script src="./components/siteManager.js"></script>
   <script src="./components/postCard.js"></script>

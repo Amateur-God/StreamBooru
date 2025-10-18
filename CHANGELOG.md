@@ -3,6 +3,64 @@
 All notable changes to this project will be documented in this file.
 The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 
+## [v0.2.2] — 2025-10-18
+
+### Added
+- New engines
+  - e621/e926: adapter with proper tag mapping, “New” (order:id_desc + before-id pagination) and “Popular” (order:score).
+  - Derpibooru: adapter using `/api/v1/json/search/images` with sort by created_at (New) and score (Popular).
+- Manage Sites presets
+  - e621 (R18) and e926 (SFW).
+  - Derpibooru.
+  - Quick-picks for other common Booru clones that already work via existing adapters:
+    - Gelbooru family (Rule34/rule34.xxx, Realbooru, Xbooru) via Gelbooru adapter.
+    - Hypnohub and TBIB via Moebooru adapter.
+- Defaults
+  - Fresh installs now include optional examples for e621 and Derpibooru (browsing works without auth).
+- Download All
+  - New “Download All” button in the top bar (next to “Manage Sites”) to bulk‑download everything currently loaded in the active view: New, Popular, Search, or Local Favorites.
+  - Single folder chooser (once), optional per‑site subfolders, concurrency‑limited downloads, and correct Referer headers for supported CDNs.
+  - New IPC: `download:bulk` (renderer → main); preload exposes `api.downloadBulk(items, options)`.
+
+### Changed
+- Site Manager
+  - Engine list expanded to include e621 and Derpibooru; helper links (Account/API Help) added for those engines.
+  - Rating/tag hints normalized across engines (rating tokens mapped to the correct flavor per site).
+- Hotlink headers
+  - Automatic Referer injection extended to cover common image CDNs: `static1.e621.net`, `static1.e926.net`, `derpicdn.net`, alongside existing Danbooru/Moebooru hosts.
+- UI
+  - Top bar updated to include the “Download All” action next to “Manage Sites.”
+
+### Fixed
+- Gelbooru family
+  - 401 “No results” on gelbooru.com: adapter now supports API credentials (`user_id` + `api_key`) and will add them to requests when present.
+  - JSON blocked/empty responses now fall back to XML automatically (requires credentials on gelbooru.com; clones like Safebooru usually work without auth).
+- Derpibooru
+  - Empty results when query was blank: adapter now defaults to `q=score.gte:0`.
+  - Optional `filter_id` support (via site credentials) to avoid local default filters hiding results.
+- Release workflow (GitHub Actions)
+  - Release notes now pull the correct section from CHANGELOG.md and use it as the GitHub Release body.
+  - Robust heading matcher: supports “## vX.Y.Z”, “## X.Y.Z”, “## [vX.Y.Z] — YYYY‑MM‑DD”, etc., with a fallback to auto-generated notes if no section is found.
+
+### Removed
+- Zerochan integration
+  - Adapter, presets, and special‑case request handling removed due to persistent anti‑bot/503 gating.
+
+### Notes
+- e621/e926
+  - Browsing is unauthenticated by default; account features (favorites, etc.) are not implemented in this release.
+  - Image requests include a reasonable UA and Referer where applicable to maximize compatibility with their static hosts.
+- Derpibooru
+  - Browsing is unauthenticated by default; favorites are not implemented in this release.
+- Bulk download
+  - Uses concurrency (default 3) to avoid rate‑limiting and disk thrash; customize via `downloadBulk(items, { concurrency, subfolderBySite })`.
+
+### Known Issues (unchanged)
+- Lightbox video playback may not work on some Linux builds lacking proprietary codecs (H.264/AAC). Use “Open Media” or replace Electron’s `libffmpeg.so` with the distro’s `chromium-codecs-ffmpeg-extra` variant.
+- Danbooru video thumbnails may look softer (site only serves small static previews for videos).
+
+[v0.2.2]: https://github.com/Amateur-God/StreamBooru/releases/tag/v0.2.2
+
 ## [v0.2.1] — 2025-10-18
 
 ### Highlights

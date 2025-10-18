@@ -154,40 +154,37 @@ jobs:
       - name: List artifacts (some may be missing if a job failed)
         run: find ./artifacts -type f -maxdepth 3 -print || true
 
-      - name: Extract release notes from CHANGELOG.md (if present)
+      - name: Extract release notes from CHANGELOG.md (robust heading match)
         id: gen_notes
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          VER="${TAG#v}"
+          TAG="${GITHUB_REF_NAME}"     # e.g., v0.2.1
+          VER="${TAG#v}"               # 0.2.1
           FILES=("CHANGELOG.md" "docs/CHANGELOG.md")
           OUT="RELEASE_NOTES.md"
           found=false
 
           for f in "${FILES[@]}"; do
             if [[ -f "$f" ]]; then
-              # Extract section that starts with "## vX.Y.Z" (or "## X.Y.Z") until the next "## "
-              awk -v ver="$VER" '
-                BEGIN {
-                  # allow headings like "## v1.2.3" or "## 1.2.3"
-                  pat1="^##[[:space:]]*v" ver "([[:space:]]|$)"
-                  pat2="^##[[:space:]]*"  ver "([[:space:]]|$)"
-                  insec=0
-                }
-                {
-                  if ($0 ~ /^##[[:space:]]/) {
-                    if (insec) exit
-                    if ($0 ~ pat1 || $0 ~ pat2) { insec=1; next }
-                  }
-                  if (insec) print
-                }
-              ' "$f" > "$OUT"
-              if [[ -s "$OUT" ]]; then
-                echo "has_notes=true" >> "$GITHUB_OUTPUT"
-                echo "notes_path=$OUT" >> "$GITHUB_OUTPUT"
-                found=true
-                break
+              # Match any '##' heading that contains the version in common forms:
+              # "## v0.2.1", "## [v0.2.1]", "## 0.2.1", "## [0.2.1]" (date text allowed after).
+              start_line=$(grep -nE "^##[[:space:]].*[\[\(]?v?${VER}[\]\)]?([[:space:]]|$|[[:punct:]].*)" -m1 "$f" | cut -d: -f1 || true)
+              if [[ -n "${start_line:-}" ]]; then
+                tail_start=$((start_line + 1))
+                next_rel=$(tail -n +"$tail_start" "$f" | grep -nE "^##[[:space:]]" -m1 | cut -d: -f1 || true)
+                if [[ -n "${next_rel:-}" ]]; then
+                  end_line=$((tail_start + next_rel - 2))
+                else
+                  end_line=$(wc -l < "$f")
+                fi
+                sed -n "${tail_start},${end_line}p" "$f" > "$OUT"
+                if [[ -s "$OUT" ]]; then
+                  echo "has_notes=true" >> "$GITHUB_OUTPUT"
+                  echo "notes_path=$OUT" >> "$GITHUB_OUTPUT"
+                  found=true
+                  break
+                fi
               fi
             fi
           done
@@ -227,7 +224,7 @@ jobs:
     needs: [prep, create-release]
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.prep.outputs.version }} # e.g., 0.1.9
+      VERSION: ${{ needs.prep.outputs.version }}
       OWNER:   ${{ needs.prep.outputs.owner }}
       REPO:    ${{ needs.prep.outputs.repo }}
       PKGNAME: ${{ secrets.AUR_PACKAGE }}

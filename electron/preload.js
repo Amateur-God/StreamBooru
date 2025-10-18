@@ -1,43 +1,37 @@
-const { contextBridge, ipcRenderer, shell } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  // Fetch posts
+  fetchBooru: (payload) => ipcRenderer.invoke('booru:fetch', payload),
+
   // Config
   loadConfig: () => ipcRenderer.invoke('config:load'),
   saveConfig: (cfg) => ipcRenderer.invoke('config:save', cfg),
 
-  // Fetch posts
-  fetchBooru: (payload) => ipcRenderer.invoke('booru:fetch', payload),
+  // External
+  openExternal: (url) => ipcRenderer.invoke('openExternal', url),
 
-  // External/open
-  openExternal: async (url) => {
-    try {
-      await shell.openExternal(url);
-      return true;
-    } catch {
-      try {
-        return await ipcRenderer.invoke('openExternal', url);
-      } catch {
-        return false;
-      }
-    }
-  },
+  // Single image download
+  downloadImage: ({ url, siteName, fileName }) =>
+    ipcRenderer.invoke('download:image', { url, siteName, fileName }),
 
-  // Images
-  downloadImage: (payload) => ipcRenderer.invoke('download:image', payload),
+  // BULK download
+  downloadBulk: (items, options = {}) =>
+    ipcRenderer.invoke('download:bulk', { items, options }),
+
+  // Image proxy (to data URL)
   proxyImage: (url) => ipcRenderer.invoke('image:proxy', { url }),
 
-  // Remote favorites (site APIs)
-  favoritePost: (payload) => ipcRenderer.invoke('booru:favorite', payload),
+  // Favorites remote
+  booruFavorite: (payload) => ipcRenderer.invoke('booru:favorite', payload),
 
-  // NEW: auth check (returns {supported, ok, info?, reason?})
-  authCheck: (payload) => ipcRenderer.invoke('booru:authCheck', payload),
+  // Favorites local
+  favKeys: () => ipcRenderer.invoke('favorites:keys'),
+  favList: () => ipcRenderer.invoke('favorites:list'),
+  favToggle: (post) => ipcRenderer.invoke('favorites:toggle', { post }),
+  favClear: () => ipcRenderer.invoke('favorites:clear'),
 
-  // NEW: rate-limit check (Danbooru) (returns {ok, headers:{}, limit?, remaining?, reset?})
-  rateLimitCheck: (payload) => ipcRenderer.invoke('booru:rateLimit', payload),
-
-  // Local favorites (app storage)
-  getLocalFavoriteKeys: () => ipcRenderer.invoke('favorites:keys'),
-  getLocalFavorites: () => ipcRenderer.invoke('favorites:list'),
-  toggleLocalFavorite: (post) => ipcRenderer.invoke('favorites:toggle', { post }),
-  clearLocalFavorites: () => ipcRenderer.invoke('favorites:clear')
+  // Optional helpers
+  authCheck: (site) => ipcRenderer.invoke('booru:authCheck', { site }),
+  rateLimit: (site) => ipcRenderer.invoke('booru:rateLimit', { site })
 });

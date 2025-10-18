@@ -2,33 +2,107 @@ const { app, BrowserWindow, ipcMain, net, Menu, shell, dialog } = require('elect
 const path = require('path');
 const fs = require('fs');
 
-const Danbooru = require('../src/adapters/danbooru');
-const Moebooru = require('../src/adapters/moebooru');
-const Gelbooru = require('../src/adapters/gelbooru');
-const Zerochan = require('../src/adapters/zerochan');
+/* Dev flag for verbose logging */
+const isDev = process.env.SB_DEV === '1';
+
+/* -------- robust adapter loader (dev: ../src/adapters, packaged: ./src/adapters) -------- */
+function loadAdapter(name) {
+  const dev = path.join(__dirname, '..', 'src', 'adapters', name);
+  const prod = path.join(__dirname, 'src', 'adapters', name);
+  try { return require(dev); } catch (e1) {
+    try { return require(prod); } catch (e2) {
+      const err = new Error(`Cannot load adapter "${name}". Tried:\n - ${dev}\n - ${prod}\nOriginal errors:\n${e1?.stack || e1}\n${e2?.stack || e2}`);
+      err.cause = e2;
+      throw err;
+    }
+  }
+}
+
+/* ------------------------------- Adapters ------------------------------- */
+const Danbooru    = loadAdapter('danbooru');
+const Moebooru    = loadAdapter('moebooru');
+const Gelbooru    = loadAdapter('gelbooru');
+const E621        = loadAdapter('e621');
+const Derpibooru  = loadAdapter('derpibooru');
 
 let win;
 
-/* ------------------------------- Hotlink headers ------------------------------- */
+/* ------------------------------- Hotlink headers + request logging ------------------------------- */
 function setupHotlinkHeaders(sess) {
-  const rules = [
-    { pattern: '*://cdn.donmai.us/*', referer: 'https://danbooru.donmai.us/' },
-    { pattern: '*://danbooru.donmai.us/*', referer: 'https://danbooru.donmai.us/' },
-    { pattern: '*://files.yande.re/*', referer: 'https://yande.re/' },
-    { pattern: '*://konachan.com/*', referer: 'https://konachan.com/' },
-    { pattern: '*://konachan.net/*', referer: 'https://konachan.net/' }
-  ];
-  rules.forEach(({ pattern, referer }) => {
-    sess.webRequest.onBeforeSendHeaders({ urls: [pattern] }, (details, callback) => {
+  sess.webRequest.onBeforeSendHeaders({ urls: ['*://*/*'] }, (details, callback) => {
+    try {
       const headers = { ...details.requestHeaders };
-      headers['Referer'] = referer;
+      const host = new URL(details.url).hostname;
+
+      // Decide Referer per host
+      let referer = null;
+      if (host.endsWith('donmai.us')) {
+        referer = 'https://danbooru.donmai.us/';
+      } else if (host === 'files.yande.re') {
+        referer = 'https://yande.re/';
+      } else if (host === 'konachan.com') {
+        referer = 'https://konachan.com/';
+      } else if (host === 'konachan.net') {
+        referer = 'https://konachan.net/';
+      } else if (host.endsWith('e621.net')) {
+        referer = 'https://e621.net/';
+      } else if (host.endsWith('e926.net')) {
+        referer = 'https://e926.net/';
+      } else if (host.endsWith('derpicdn.net') || host.endsWith('derpibooru.org')) {
+        referer = 'https://derpibooru.org/';
+      }
+      if (referer) headers['Referer'] = referer;
+
+      // Ensure a reasonable UA
       if (!headers['User-Agent']) {
         headers['User-Agent'] =
           'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 StreamBooru/Electron';
       }
+
       callback({ requestHeaders: headers });
-    });
+    } catch {
+      callback({});
+    }
   });
+
+  // Lightweight dev logging for Gelbooru/Derpibooru (and common clones)
+  if (isDev) {
+    const filt = { urls: ['*://*/*'] };
+    sess.webRequest.onCompleted(filt, (d) => {
+      try {
+        const h = new URL(d.url).hostname;
+        if (
+          h.includes('gelbooru') ||
+          h.includes('safebooru') ||
+          h.includes('rule34') ||
+          h.includes('realbooru') ||
+          h.includes('xbooru') ||
+          h.includes('derpibooru') ||
+          h.includes('derpicdn')
+        ) {
+          console.log('[net:onCompleted]', JSON.stringify({
+            url: d.url, statusCode: d.statusCode, method: d.method, fromCache: d.fromCache || false
+          }));
+        }
+      } catch {}
+    });
+    sess.webRequest.onErrorOccurred(filt, (d) => {
+      try {
+        const h = new URL(d.url).hostname;
+        if (
+          h.includes('gelbooru') ||
+          h.includes('safebooru') ||
+          h.includes('rule34') ||
+          h.includes('realbooru') ||
+          h.includes('xbooru') ||
+          h.includes('derpibooru') ||
+          h.includes('derpicdn')
+        ) {
+          console.warn('[net:onError]', JSON.stringify({ url: d.url, error: d.error, method: d.method }));
+        }
+      } catch {}
+    });
+  }
 }
 
 /* --------------------------------- Window --------------------------------- */
@@ -82,6 +156,22 @@ function readConfig() {
           rating: 'safe',
           tags: '',
           credentials: { login: '', password_hash: '' }
+        },
+        {
+          name: 'e621 (safe)',
+          type: 'e621',
+          baseUrl: 'https://e621.net',
+          rating: 'safe',
+          tags: '',
+          credentials: {}
+        },
+        {
+          name: 'Derpibooru (safe)',
+          type: 'derpibooru',
+          baseUrl: 'https://derpibooru.org',
+          rating: 'safe',
+          tags: '',
+          credentials: {}
         }
       ]
     };
@@ -119,14 +209,16 @@ function applyDefaultHeaders(request, url, headers = {}) {
 }
 
 function httpGetJson(url, headers = {}) {
+  if (isDev) console.log('[httpGetJson] GET', url);
   return new Promise((resolve, reject) => {
     const request = net.request({ url, method: 'GET' });
     applyDefaultHeaders(request, url, { Accept: 'application/json, text/json;q=0.9, */*;q=0.1', ...headers });
     let data = '';
     request.on('response', (response) => {
+      const status = response.statusCode || 0;
       response.on('data', (chunk) => (data += chunk));
       response.on('end', () => {
-        const status = response.statusCode || 0;
+        if (isDev) console.log('[httpGetJson:end]', status, url);
         const rawCT = response.headers['content-type'] || response.headers['Content-Type'] || '';
         const ct = Array.isArray(rawCT) ? rawCT[0] : rawCT;
         if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\nBody: ${data.slice(0, 300)}...`));
@@ -139,25 +231,27 @@ function httpGetJson(url, headers = {}) {
         catch (e) { reject(new Error(`Failed to parse JSON from ${url}: ${e.message}\nBody: ${data.slice(0,300)}...`)); }
       });
     });
-    request.on('error', reject);
+    request.on('error', (e) => reject(e));
     request.end();
   });
 }
 
 function httpGetText(url, headers = {}) {
+  if (isDev) console.log('[httpGetText] GET', url);
   return new Promise((resolve, reject) => {
     const request = net.request({ url, method: 'GET' });
     applyDefaultHeaders(request, url, headers);
     let data = '';
     request.on('response', (response) => {
+      const status = response.statusCode || 0;
       response.on('data', (chunk) => (data += chunk));
       response.on('end', () => {
-        const status = response.statusCode || 0;
+        if (isDev) console.log('[httpGetText:end]', status, url, 'bytes:', data.length);
         if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\nBody: ${data.slice(0,300)}...`));
         resolve(data);
       });
     });
-    request.on('error', reject);
+    request.on('error', (e) => reject(e));
     request.end();
   });
 }
@@ -166,13 +260,12 @@ function httpPostForm(url, form, headers = {}) {
   return new Promise((resolve, reject) => {
     const postData = new URLSearchParams(form).toString();
     const request = net.request({ url, method: 'POST' });
-    // Important: let Chromium set Content-Length automatically to avoid net::ERR_INVALID_ARGUMENT
     applyDefaultHeaders(request, url, { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json, text/json;q=0.9, */*;q=0.1', ...headers });
     let data = '';
     request.on('response', (response) => {
+      const status = response.statusCode || 0;
       response.on('data', (chunk) => (data += chunk));
       response.on('end', () => {
-        const status = response.statusCode || 0;
         if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\nBody: ${data.slice(0,300)}...`));
         try { resolve(JSON.parse(data)); } catch { resolve({ ok: true, raw: data }); }
       });
@@ -189,9 +282,9 @@ function httpDelete(url, headers = {}) {
     applyDefaultHeaders(request, url, headers);
     let data = '';
     request.on('response', (response) => {
+      const status = response.statusCode || 0;
       response.on('data', (chunk) => (data += chunk));
       response.on('end', () => {
-        const status = response.statusCode || 0;
         if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\nBody: ${data.slice(0,300)}...`));
         try { resolve(JSON.parse(data)); } catch { resolve({ ok: true, raw: data }); }
       });
@@ -201,12 +294,13 @@ function httpDelete(url, headers = {}) {
   });
 }
 
-/* -------------------------------- Adapters -------------------------------- */
+/* -------------------------------- Adapters registry -------------------------------- */
 const adapters = {
   danbooru: new Danbooru(httpGetJson, httpPostForm, httpDelete),
   moebooru: new Moebooru(httpGetJson, httpPostForm),
-  gelbooru: new Gelbooru(httpGetJson),
-  zerochan: new Zerochan(httpGetText)
+  gelbooru: new Gelbooru(httpGetJson, httpGetText), // pass httpGetText for XML fallback
+  e621: new E621(httpGetJson),
+  derpibooru: new Derpibooru(httpGetJson)
 };
 
 /* --------------------------------- IPC --------------------------------- */
@@ -217,13 +311,19 @@ ipcMain.handle('config:save', async (_evt, cfg) => { writeConfig(cfg); return { 
 // Fetch posts
 ipcMain.handle('booru:fetch', async (_evt, payload) => {
   const { site, viewType, cursor, limit = 40, search = '' } = payload || {};
+  if (isDev) console.log('[IPC] booru:fetch', { type: site?.type, baseUrl: site?.baseUrl, viewType, limit, search });
   try {
     if (!site || !site.type || !adapters[site.type]) throw new Error(`Unsupported site type: ${site?.type}`);
     const adapter = adapters[site.type];
-    if (viewType === 'new') return await adapter.fetchNew(site, { cursor, limit, search });
-    if (viewType === 'popular') return await adapter.fetchPopular(site, { cursor, limit, search });
-    throw new Error(`Unsupported viewType: ${viewType}`);
+    const res = (viewType === 'new')
+      ? await adapter.fetchNew(site, { cursor, limit, search })
+      : (viewType === 'popular')
+        ? await adapter.fetchPopular(site, { cursor, limit, search })
+        : (() => { throw new Error(`Unsupported viewType: ${viewType}`); })();
+    if (isDev) console.log('[IPC] booru:fetch done', site?.type, 'posts:', res?.posts?.length || 0);
+    return res;
   } catch (err) {
+    if (isDev) console.error('[IPC] booru:fetch error', site?.type, err);
     return { posts: [], nextCursor: cursor || null, error: String(err?.message || err) };
   }
 });
@@ -248,7 +348,13 @@ ipcMain.handle('download:image', async (_evt, payload) => {
     ['danbooru.donmai.us', 'https://danbooru.donmai.us/'],
     ['files.yande.re', 'https://yande.re/'],
     ['konachan.com', 'https://konachan.com/'],
-    ['konachan.net', 'https://konachan.net/']
+    ['konachan.net', 'https://konachan.net/'],
+    ['static1.e621.net', 'https://e621.net/'],
+    ['e621.net', 'https://e621.net/'],
+    ['static1.e926.net', 'https://e926.net/'],
+    ['e926.net', 'https://e926.net/'],
+    ['derpicdn.net', 'https://derpibooru.org/'],
+    ['derpibooru.org', 'https://derpibooru.org/']
   ]);
 
   await new Promise((resolve, reject) => {
@@ -267,6 +373,92 @@ ipcMain.handle('download:image', async (_evt, payload) => {
   });
 
   return { ok: true, path: savePath };
+});
+
+// NEW: Bulk download all current results
+ipcMain.handle('download:bulk', async (_evt, payload) => {
+  const { items = [], options = {} } = payload || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return { ok: false, error: 'No items to download' };
+  }
+
+  // Choose base save directory once
+  const baseDir = dialog.showOpenDialogSync(win, {
+    title: 'Choose folder to save images',
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (!baseDir || !baseDir[0]) return { ok: false, cancelled: true };
+  const basePath = baseDir[0];
+
+  // Reuse/extend referer map
+  const refererMap = new Map([
+    ['cdn.donmai.us', 'https://danbooru.donmai.us/'],
+    ['danbooru.donmai.us', 'https://danbooru.donmai.us/'],
+    ['files.yande.re', 'https://yande.re/'],
+    ['konachan.com', 'https://konachan.com/'],
+    ['konachan.net', 'https://konachan.net/'],
+    ['static1.e621.net', 'https://e621.net/'],
+    ['e621.net', 'https://e621.net/'],
+    ['static1.e926.net', 'https://e926.net/'],
+    ['e926.net', 'https://e926.net/'],
+    ['derpicdn.net', 'https://derpibooru.org/'],
+    ['derpibooru.org', 'https://derpibooru.org/']
+  ]);
+
+  const sanitize = (s) => String(s || '').replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').slice(0, 200);
+  const subfolder = !!options.subfolderBySite;
+
+  // Simple queue with limited concurrency
+  const concurrency = Number(options.concurrency || 3);
+  let index = 0;
+  const results = [];
+  await fs.promises.mkdir(basePath, { recursive: true });
+
+  const worker = async () => {
+    while (true) {
+      const i = index++;
+      if (i >= items.length) return;
+      const it = items[i];
+      try {
+        const u = new URL(it.url);
+        const siteFolder = subfolder ? sanitize(it.siteName || u.hostname || 'unknown') : '';
+        const targetDir = siteFolder ? path.join(basePath, siteFolder) : basePath;
+        await fs.promises.mkdir(targetDir, { recursive: true });
+
+        const filename = sanitize(it.fileName || path.basename(u.pathname) || `file_${i}`);
+        const outPath = path.join(targetDir, filename);
+
+        await new Promise((resolve, reject) => {
+          const req = net.request({ url: it.url, method: 'GET' });
+          const ref = refererMap.get(u.hostname);
+          req.setHeader('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 StreamBooru/Electron');
+          req.setHeader('Accept', '*/*');
+          req.setHeader('Accept-Language', 'en-US,en;q=0.9');
+          if (ref) req.setHeader('Referer', ref);
+
+          const file = fs.createWriteStream(outPath);
+          req.on('response', (res) => {
+            res.pipe(file);
+            res.on('end', resolve);
+            res.on('error', reject);
+          });
+          req.on('error', reject);
+          req.end();
+        });
+
+        results.push({ i, ok: true, path: outPath });
+      } catch (e) {
+        results.push({ i, ok: false, error: String(e?.message || e) });
+      }
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+
+  const saved = results.filter(r => r.ok).length;
+  const failed = results.filter(r => !r.ok);
+  return { ok: true, saved, failed, basePath };
 });
 
 // Favorites (remote)
@@ -292,7 +484,13 @@ ipcMain.handle('image:proxy', async (_evt, { url }) => {
     ['danbooru.donmai.us', 'https://danbooru.donmai.us/'],
     ['files.yande.re', 'https://yande.re/'],
     ['konachan.com', 'https://konachan.com/'],
-    ['konachan.net', 'https://konachan.net/']
+    ['konachan.net', 'https://konachan.net/'],
+    ['static1.e621.net', 'https://e621.net/'],
+    ['e621.net', 'https://e621.net/'],
+    ['static1.e926.net', 'https://e926.net/'],
+    ['e926.net', 'https://e926.net/'],
+    ['derpicdn.net', 'https://derpibooru.org/'],
+    ['derpibooru.org', 'https://derpibooru.org/']
   ]);
 
   return await new Promise((resolve) => {
@@ -322,7 +520,7 @@ ipcMain.handle('image:proxy', async (_evt, { url }) => {
   });
 });
 
-// Auth check (adapters implement)
+// Auth check (optional per adapter)
 ipcMain.handle('booru:authCheck', async (_evt, payload) => {
   const { site } = payload || {};
   if (!site || !site.type || !adapters[site.type]) return { supported: false, ok: false, reason: 'Unsupported site' };
@@ -336,7 +534,7 @@ ipcMain.handle('booru:authCheck', async (_evt, payload) => {
   }
 });
 
-// NEW: Danbooru rate limit check via headers
+// Danbooru rate limit headers (if needed)
 ipcMain.handle('booru:rateLimit', async (_evt, payload) => {
   const { site } = payload || {};
   if (!site || site.type !== 'danbooru') return { ok: false, reason: 'Rate limit only for Danbooru' };
@@ -354,20 +552,14 @@ ipcMain.handle('booru:rateLimit', async (_evt, payload) => {
       const req = net.request({ url, method: 'GET' });
       applyDefaultHeaders(req, url, { Accept: 'application/json' });
       req.on('response', (res) => {
-        // Normalize headers to lower-case string values
         const headers = {};
         Object.entries(res.headers || {}).forEach(([k, v]) => {
           headers[String(k).toLowerCase()] = Array.isArray(v) ? v[0] : String(v);
         });
-
-        // Danbooru may use either x-ratelimit-* or x-rate-limit-*
         const getH = (n) => headers[n] || headers[n.replace('ratelimit', 'rate-limit')] || null;
-
         const limit = Number(getH('x-ratelimit-limit')) || Number(getH('x-rate-limit-limit')) || null;
         const remaining = Number(getH('x-ratelimit-remaining')) || Number(getH('x-rate-limit-remaining')) || null;
         const reset = Number(getH('x-ratelimit-reset')) || Number(getH('x-rate-limit-reset')) || null;
-
-        // Drain body (not used)
         res.on('data', () => {});
         res.on('end', () => resolve({ ok: true, headers, limit, remaining, reset, status: res.statusCode || 0 }));
       });
