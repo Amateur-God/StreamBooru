@@ -45,44 +45,54 @@ jobs:
         with:
           name: app-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
 
-      # Signed Release build if keystore secrets are present (PKCS#12)
+      # Decode keystore only when secret exists (shell guard; no "if:" expression)
       - name: Decode Keystore (PKCS#12)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/keystore.p12
+          if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/keystore.p12
+            echo "Keystore decoded to android/keystore.p12"
+          else
+            echo "ANDROID_KEYSTORE_BASE64 not set; skipping keystore decode"
+          fi
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
 
+      # Build signed release only when secret exists (shell guard; no "if:" expression)
       - name: Build Signed Release (AAB + APK)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         working-directory: android
         env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PATH: keystore.p12
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }} # set same as store password for PKCS#12
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          ./gradlew clean
-          ./gradlew \
-            bundleRelease \
-            assembleRelease \
-            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/$KEYSTORE_PATH \
-            -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
-            -Pandroid.injected.signing.store.type=PKCS12 \
-            -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
-            -Pandroid.injected.signing.key.password=$KEY_PASSWORD
+          if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
+            ./gradlew clean
+            ./gradlew \
+              bundleRelease \
+              assembleRelease \
+              -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/$KEYSTORE_PATH \
+              -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
+              -Pandroid.injected.signing.store.type=PKCS12 \
+              -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+              -Pandroid.injected.signing.key.password=$KEY_PASSWORD
+          else
+            echo "No keystore secret; skipping signed release build"
+          fi
 
       - name: Upload Release AAB
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: app-release-aab
           path: android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: ignore
 
       - name: Upload Release APK
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
           path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: ignore
