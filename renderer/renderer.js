@@ -1,5 +1,5 @@
 // Renderer with Search/New/Popular/Favorites, Manage Sites,
-// Bulk Download, and filename templates (moved into a popover opened from Download All)
+// Bulk Download, and filename templates (popover from Download All)
 
 const state = {
   config: { sites: [] },
@@ -77,6 +77,7 @@ function recencyBoost(p, now=Date.now()) {
   const half = 48;
   return Math.exp(-ageH/half);
 }
+function clamp01(x) { const n = Number(x); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0; }
 function computePopularity(items) {
   const stats = buildSiteStats(items);
   const now = Date.now();
@@ -84,10 +85,11 @@ function computePopularity(items) {
   for (const p of items) {
     const sk = siteKey(p.site || {});
     const st = stats.get(sk) || { favP95: 0, scoreP95: 0 };
-    const favNorm = st.favP95>0 ? Math.min(1, Math.max(0, safeNum(p.favorites,0)/st.favP95)) : 0;
-    const scoreNorm = st.scoreP95>0 ? Math.min(1, Math.max(0, safeNum(p.score,0)/st.scoresP95)) : 0;
+    const favNorm = st.favP95>0 ? clamp01(safeNum(p.favorites,0)/st.favP95) : 0;
+    // FIX: correct property and guard
+    const scoreNorm = st.scoreP95>0 ? clamp01(safeNum(p.score,0)/st.scoreP95) : 0;
     const pop = 1.0*favNorm + 0.6*scoreNorm + 0.15*recencyBoost(p, now);
-    map.set(itemKey(p), pop);
+    map.set(itemKey(p), Number.isFinite(pop) ? pop : 0);
   }
   return map;
 }
@@ -537,23 +539,64 @@ function setupInfiniteScroll() {
   });
 }
 
-// Local favorites helpers
+// ---------- Local favorites with fallback ----------
 window.isLocalFavorite = (post) => (window.__localFavsSet || new Set()).has(itemKey(post));
-window.toggleLocalFavorite = async (post) => {
-  const res = await window.api.toggleLocalFavorite(post);
-  window.__localFavsSet = window.__localFavsSet || new Set(await window.api.getLocalFavoriteKeys());
-  if (res?.ok) {
-    if (res.favorited) window.__localFavsSet.add(res.key);
-    else window.__localFavsSet.delete(res.key);
-    if (state.viewType === 'faves') { clearFeed(); await fetchBatch(); }
+
+function localFavToggleFallback(post) {
+  const KEY_KEYS = 'sb_local_favs_keys_v1';
+  const KEY_POSTS = 'sb_local_favs_posts_v1';
+  const key = itemKey(post);
+  const loadKeys = () => { try { return new Set(JSON.parse(localStorage.getItem(KEY_KEYS) || '[]')); } catch { return new Set(); } };
+  const saveKeys = (set) => { try { localStorage.setItem(KEY_KEYS, JSON.stringify([...set])); } catch {} };
+  const loadMap = () => { try { return new Map(Object.entries(JSON.parse(localStorage.getItem(KEY_POSTS) || '{}'))); } catch { return new Map(); } };
+  const saveMap = (map) => { try { localStorage.setItem(KEY_POSTS, JSON.stringify(Object.fromEntries(map))); } catch {} };
+
+  const keys = loadKeys();
+  const map = loadMap();
+  let favorited;
+  if (keys.has(key)) {
+    keys.delete(key);
+    map.delete(key);
+    favorited = false;
+  } else {
+    keys.add(key);
+    map.set(key, JSON.stringify({ ...post, _added_at: Date.now() }));
+    favorited = true;
   }
-  return res;
+  saveKeys(keys);
+  saveMap(map);
+  return { ok: true, favorited, key };
+}
+
+window.toggleLocalFavorite = async (post) => {
+  try {
+    let res;
+    if (typeof window.api?.toggleLocalFavorite === 'function') {
+      res = await window.api.toggleLocalFavorite(post);
+    } else {
+      res = localFavToggleFallback(post);
+    }
+    window.__localFavsSet = window.__localFavsSet || new Set(await (window.api?.getLocalFavoriteKeys?.() || []));
+    const key = res?.key || itemKey(post);
+    if (res?.ok) {
+      if (res.favorited) window.__localFavsSet.add(key);
+      else window.__localFavsSet.delete(key);
+      if (state.viewType === 'faves') { clearFeed(); await fetchBatch(); }
+    } else {
+      alert(`Save failed: ${res?.error || 'unknown error'}`);
+    }
+    return res;
+  } catch (e) {
+    console.error('toggleLocalFavorite error:', e);
+    alert(`Save failed: ${e?.message || e}`);
+    return { ok: false, error: String(e?.message || e) };
+  }
 };
 
 // ---------- bootstrap ----------
 async function init() {
   await loadConfig();
-  try { const keys = await window.api.getLocalFavoriteKeys(); window.__localFavsSet = new Set(keys || []); } catch {}
+  try { const keys = await (window.api?.getLocalFavoriteKeys?.() || []); window.__localFavsSet = new Set(keys || []); } catch {}
   setupTabs();
   setupSearch();
   setupManageSites();

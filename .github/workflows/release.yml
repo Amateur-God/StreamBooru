@@ -196,7 +196,7 @@ jobs:
           body_path: ${{ steps.extract.outputs.notes_path }}
           generate_release_notes: false
           make_latest: true
-          allow_updates: true
+          overwrite_files: true
           fail_on_unmatched_files: false
           files: |
             artifacts/linux/**
@@ -211,7 +211,7 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           make_latest: true
-          allow_updates: true
+          overwrite_files: true
           fail_on_unmatched_files: false
           files: |
             artifacts/linux/**

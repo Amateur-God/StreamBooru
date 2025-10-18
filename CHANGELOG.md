@@ -3,6 +3,35 @@
 All notable changes to this project will be documented in this file.
 The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 
+
+## [v0.3.1] — 2025-10-18
+
+### Added
+- Download options popover
+  - Shift-click, Alt-click, or right-click “Download All” to open options.
+  - Filename templates with presets and “Custom…” entry; selection is used by both single “Download” and “Download All”.
+  - “Shift for options” tooltip shown below the button for visibility.
+
+### Changed
+- Naming templates
+  - Tokens supported: `{site} {site_type} {id} {score} {favorites} {rating} {width} {height} {index} {ext} {original_name} {created} {created_yyyy} {created_mm} {created_dd} {created_hhmm} {artist} {copyright} {character}`.
+- Card thumbnails
+  - Prefer `sample_url` (then `file_url`, then `preview_url`) and add a simple `srcset` to keep Danbooru previews sharp.
+
+### Fixed
+- Favorites (local)
+  - “♥ Save” button works again even if the preload method is missing: renderer includes a safe localStorage fallback.
+  - Preload bridge restored back‑compat names (`toggleLocalFavorite`, `getLocalFavoriteKeys`, etc.).
+- Popular view sorting
+  - Corrected popularity computation (typo fix `st.scoresP95` → `st.scoreP95` and added guards), restoring true global popularity sorting.
+- Manage Sites – Test row
+  - Restored full test flow (API probe, Auth check with info, Danbooru rate‑limit) and brought back “Open Account Page” and “API Help” buttons.
+  - Fixed info text rendering (no more “[object Object]”) and polished badges.
+- Release workflow
+  - Release notes are reliably extracted from CHANGELOG and passed via `body_path`; removed unsupported `allow_updates` input. Falls back to auto‑notes when no section matches.
+
+[v0.3.1]: https://github.com/Amateur-God/StreamBooru/releases/tag/v0.3.1
+
 ## [v0.3.0] — 2025-10-18
 
 ### Added
