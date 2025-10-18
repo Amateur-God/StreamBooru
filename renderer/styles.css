@@ -101,15 +101,22 @@ body {
   padding: 8px;
 }
 .card .meta .site { color: var(--accent); }
+
+/* Actions: switch to grid so 3–4 buttons wrap cleanly */
 .card .actions {
-  display: flex; gap: 8px;
-  padding: 8px; border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
 }
 .card .actions button {
-  flex: 1; padding: 6px 8px;
+  width: 100%;
+  padding: 6px 8px;
   border-radius: 6px; border: 1px solid var(--border);
   background: transparent; color: var(--text);
   cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 .loading { text-align: center; padding: 16px; color: var(--muted); }
@@ -290,9 +297,15 @@ body {
   position: relative; max-width: 96vw; max-height: 92vh;
   display: flex; flex-direction: column; gap: 8px; align-items: center;
 }
-.lightbox img {
-  max-width: 96vw; max-height: 86vh;
-  object-fit: contain; background: #000; border-radius: 6px;
+.lightbox .lb-media {
+  display: block;
+  max-width: 96vw;
+  max-height: 86vh;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  background: #000;
+  border-radius: 6px;
 }
 .lightbox .toolbar {
   display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;

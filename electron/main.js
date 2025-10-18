@@ -166,7 +166,8 @@ function httpPostForm(url, form, headers = {}) {
   return new Promise((resolve, reject) => {
     const postData = new URLSearchParams(form).toString();
     const request = net.request({ url, method: 'POST' });
-    applyDefaultHeaders(request, url, { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData), ...headers });
+    // Important: let Chromium set Content-Length automatically to avoid net::ERR_INVALID_ARGUMENT
+    applyDefaultHeaders(request, url, { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json, text/json;q=0.9, */*;q=0.1', ...headers });
     let data = '';
     request.on('response', (response) => {
       response.on('data', (chunk) => (data += chunk));

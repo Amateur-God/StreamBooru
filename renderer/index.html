@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <title>StreamBooru</title>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https: http:;">
+  <!-- Allow media (videos/audio) from https/http/data/blob alongside images -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https: http:;">
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>

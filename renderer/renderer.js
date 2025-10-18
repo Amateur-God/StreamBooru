@@ -1,5 +1,5 @@
-// Renderer with dedicated Search tab (round-robin interleave), New/Popular global sorts, Favorites local,
-// and robust Manage Sites invocation.
+// Renderer with dedicated Search tab (round-robin interleave), New (round-robin append),
+// Popular (global popularity sort), Favorites (local), and robust Manage Sites.
 
 const state = {
   config: { sites: [] },
@@ -7,13 +7,21 @@ const state = {
   cursors: {}, // per-site cursor map
   items: [], // rendered items
   loading: false,
-  fetchedBatches: {}, // used for non-search fairness
-  search: '', // global search string
+  search: '',
 
   // Search mode aggregation
   searchBuckets: new Map(), // siteKey -> posts[]
   searchSeen: new Set(),    // keys to avoid dupes
-  searchOrder: []           // site order as keys
+  searchOrder: [],          // site order as keys (also used for New)
+
+  // New mode aggregation (round-robin append)
+  feedSeen: new Set(),      // global seen set for non-search feed
+  rrCursor: 0,              // starting index for per-fetch round-robin across sites
+
+  // Paging/flow control
+  noMoreResults: false,
+  pendingFetch: false,
+  fetchGen: 0               // generation token to drop stale responses across resets
 };
 
 // ---------- utils ----------
@@ -111,7 +119,7 @@ function sortItems(items, viewType) {
     const pop = computePopularity(list);
     list.sort((a,b)=>popularCompare(a,b,pop));
   } else if (viewType === 'new') {
-    list.sort(newCompare);
+    list.sort(newCompare); // kept for completeness; New tab uses RR append mode below
   } else if (viewType === 'faves') {
     list.sort((a,b)=>{
       const al = a._added_at || 0, bl = b._added_at || 0;
@@ -136,6 +144,63 @@ function interleaveRoundRobin(orderKeys, buckets) {
   return out;
 }
 
+// Incremental RR merge for a single fetch cycle, starting at rrCursor
+function rrMergeAppend(orderKeys, perSiteNewArrays, startIndex) {
+  const arrays = orderKeys.map((k)=> perSiteNewArrays.get(k) || []);
+  const total = arrays.reduce((s,a)=>s+a.length, 0);
+  const out = [];
+  if (arrays.length === 0 || total === 0) return out;
+
+  let remaining = total;
+  while (remaining > 0) {
+    for (let j=0; j<arrays.length; j++) {
+      const idx = (startIndex + j) % arrays.length;
+      const a = arrays[idx];
+      if (a.length) {
+        out.push(a.shift());
+        remaining--;
+      }
+    }
+  }
+  return out;
+}
+
+// ---------- Remote favorites helpers (site APIs) ----------
+
+function findSiteConfigForPost(post) {
+  const b = (post?.site?.baseUrl || '').replace(/\/+$/, '');
+  const t = post?.site?.type || '';
+  return (state.config.sites || []).find(
+    (s) => (s.type === t) && ((s.baseUrl || '').replace(/\/+$/, '') === b)
+  ) || null;
+}
+function hasRemoteFavoriteSupport(post) {
+  const s = findSiteConfigForPost(post);
+  if (!s) return false;
+  if (s.type === 'danbooru') return !!(s.credentials?.login && s.credentials?.api_key);
+  if (s.type === 'moebooru') return !!(s.credentials?.login && s.credentials?.password_hash);
+  return false;
+}
+async function toggleRemoteFavorite(post) {
+  const siteCfg = findSiteConfigForPost(post);
+  if (!siteCfg) return { ok: false, error: 'No site config' };
+  const already = !!(post.user_favorited || post._remote_favorited);
+  const action = already ? 'remove' : 'add';
+  try {
+    const res = await window.api.favoritePost({ site: siteCfg, postId: post.id, action });
+    if (res?.ok) {
+      post._remote_favorited = action === 'add';
+      return { ok: true, favorited: post._remote_favorited };
+    }
+    return { ok: false, error: res?.error || 'Favorite failed' };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+// Expose for components
+window.hasRemoteFavoriteSupport = hasRemoteFavoriteSupport;
+window.toggleRemoteFavoriteRemote = toggleRemoteFavorite;
+
 // ---------- state/bootstrap ----------
 
 async function loadConfig() {
@@ -150,27 +215,73 @@ function setActiveTab() {
 function clearFeed() {
   state.items = [];
   state.cursors = {};
-  state.fetchedBatches = {};
+  // Reset buckets/sets and RR cursor
   state.searchBuckets = new Map();
   state.searchSeen = new Set();
-  document.getElementById('feed').innerHTML = '';
-}
-function renderAll() {
+  state.feedSeen = new Set();
+  state.rrCursor = 0;
+  state.noMoreResults = false;
+  state.pendingFetch = false;
+  state.fetchGen++;
   const feed = document.getElementById('feed');
-  const preserve = window.scrollY;
+  feed.innerHTML = '';
+}
+function renderAppend() {
+  const feed = document.getElementById('feed');
+  const start = feed.childElementCount;
+  for (let i = start; i < state.items.length; i++) {
+    feed.appendChild(window.PostCard(state.items[i], i));
+  }
+}
+function renderReplacePreserveScroll() {
+  const feed = document.getElementById('feed');
+
+  const topbarH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 64;
+  let anchorKey = null;
+  let anchorTop = null;
+  for (const child of Array.from(feed.children)) {
+    const rect = child.getBoundingClientRect();
+    if (rect.bottom > topbarH) {
+      anchorKey = child.dataset?.key || null;
+      anchorTop = rect.top;
+      break;
+    }
+  }
+
   feed.innerHTML = '';
   window.getGalleryItems = () => state.items;
-  state.items.forEach((p,i)=> feed.appendChild(window.PostCard(p,i)));
-  window.scrollTo(0, preserve);
+  for (let i = 0; i < state.items.length; i++) {
+    feed.appendChild(window.PostCard(state.items[i], i));
+  }
+
+  if (anchorKey) {
+    const newAnchor = feed.querySelector(`[data-key="${CSS.escape(anchorKey)}"]`);
+    if (newAnchor) {
+      const rect2 = newAnchor.getBoundingClientRect();
+      if (typeof anchorTop === 'number') {
+        const delta = rect2.top - anchorTop;
+        window.scrollBy(0, delta);
+      }
+    }
+  }
 }
+window.getGalleryItems = () => state.items;
 function isSearchTab() { return state.viewType === 'search'; }
 
 // ---------- fetching ----------
 
 async function fetchBatch() {
-  if (state.loading) return;
-  state.loading = true;
   const loadingEl = document.getElementById('loading');
+  if (state.noMoreResults) {
+    loadingEl.classList.remove('hidden');
+    loadingEl.textContent = 'End of results';
+    return;
+  }
+  if (state.loading) { state.pendingFetch = true; return; }
+
+  const gen = state.fetchGen;
+
+  state.loading = true;
   loadingEl.classList.remove('hidden');
   loadingEl.textContent = 'Loading…';
 
@@ -178,25 +289,30 @@ async function fetchBatch() {
     const all = await window.api.getLocalFavorites();
     const filtered = (all || []).filter((p)=> tagsInclude(p, state.search));
     state.items = sortItems(filtered, 'faves');
-    renderAll();
-    loadingEl.classList.add('hidden'); state.loading = false; return;
+    renderReplacePreserveScroll();
+    loadingEl.classList.add('hidden');
+    state.loading = false;
+    if (state.pendingFetch) { state.pendingFetch = false; fetchBatch(); }
+    return;
   }
 
   const sites = (state.config.sites || []).filter((s)=> s.baseUrl && s.type);
   if (sites.length === 0) {
     loadingEl.textContent = 'No sites configured. Click Manage Sites to add.';
-    state.loading = false; return;
+    state.loading = false;
+    return;
   }
 
-  // For dedicated Search tab we always fetch with viewType=new (native site order) and pass search.
   const doSearch = isSearchTab() && (state.search || '').trim().length > 0;
+  const isPopular = state.viewType === 'popular';
+  const isNew = state.viewType === 'new';
 
   const reqs = sites.map(async (site)=>{
     const key = siteKey(site);
     const cursor = state.cursors[key] || null;
     const res = await window.api.fetchBooru({
       site,
-      viewType: doSearch ? 'new' : state.viewType, // native search vs New/Popular
+      viewType: doSearch ? 'new' : state.viewType,
       cursor,
       limit: 40,
       search: state.search || ''
@@ -205,7 +321,17 @@ async function fetchBatch() {
     return { key, posts: Array.isArray(res?.posts) ? res.posts : [] };
   });
 
-  const results = await Promise.allSettled(reqs);
+  let results;
+  try { results = await Promise.allSettled(reqs); }
+  catch { results = []; }
+
+  if (gen !== state.fetchGen) {
+    state.loading = false;
+    if (state.pendingFetch) { state.pendingFetch = false; fetchBatch(); }
+    return;
+  }
+
+  let addedTotal = 0;
 
   if (doSearch) {
     for (const r of results) {
@@ -220,19 +346,72 @@ async function fetchBatch() {
         bucket.push(p);
       }
     }
+    const before = state.items.length;
     state.items = interleaveRoundRobin(state.searchOrder, state.searchBuckets);
-    renderAll();
-  } else {
+    addedTotal = Math.max(0, state.items.length - before);
+    if (addedTotal > 0) renderAppend();
+  } else if (isPopular) {
     const collected = results.flatMap((r)=> r.status==='fulfilled'? r.value.posts : []);
-    const map = new Map();
-    for (const p of state.items) map.set(itemKey(p), p);
-    for (const p of collected) map.set(itemKey(p), p);
-    state.items = sortItems(Array.from(map.values()), state.viewType);
-    renderAll();
+    const seen = new Set(state.items.map(itemKey));
+    const newbies = [];
+    for (const p of collected) {
+      const k = itemKey(p);
+      if (seen.has(k)) continue;
+      newbies.push(p);
+      seen.add(k);
+    }
+    if (newbies.length > 0) {
+      const mergedSorted = sortItems(state.items.concat(newbies), 'popular');
+      const currKeys = state.items.map(itemKey);
+      const prefixKeys = mergedSorted.slice(0, currKeys.length).map(itemKey);
+
+      state.items = mergedSorted;
+      if (currKeys.length > 0 && currKeys.every((k,i)=>k===prefixKeys[i])) {
+        renderAppend();
+      } else {
+        renderReplacePreserveScroll();
+      }
+      addedTotal = newbies.length;
+    }
+  } else if (isNew) {
+    const perSiteNew = new Map();
+    for (const k of state.searchOrder) perSiteNew.set(k, []);
+    for (const r of results) {
+      if (r.status !== 'fulfilled') continue;
+      const { key, posts } = r.value;
+      if (!perSiteNew.has(key)) perSiteNew.set(key, []);
+      const arr = perSiteNew.get(key);
+      for (const p of posts) {
+        const k = itemKey(p);
+        if (state.feedSeen.has(k)) continue;
+        state.feedSeen.add(k);
+        arr.push(p);
+      }
+    }
+    const chunk = rrMergeAppend(state.searchOrder, perSiteNew, state.rrCursor);
+    addedTotal = chunk.length;
+    if (addedTotal > 0) {
+      state.items = state.items.concat(chunk);
+      renderAppend();
+      const siteCount = Math.max(1, state.searchOrder.length);
+      state.rrCursor = (state.rrCursor + 1) % siteCount;
+    }
   }
 
-  loadingEl.classList.add('hidden');
+  if (addedTotal === 0) {
+    state.noMoreResults = true;
+    loadingEl.classList.remove('hidden');
+    loadingEl.textContent = 'End of results';
+  } else {
+    loadingEl.classList.add('hidden');
+  }
+
   state.loading = false;
+  if (state.pendingFetch) {
+    const runAgain = !state.noMoreResults;
+    state.pendingFetch = false;
+    if (runAgain) fetchBatch();
+  }
 }
 
 // ---------- wiring ----------
@@ -262,7 +441,6 @@ function setupSearch() {
   form.addEventListener('submit', (e)=>{
     e.preventDefault();
     const v = (input.value || '').trim();
-    // Switch to dedicated Search tab on any query (unless Favorites)
     state.search = v;
     state.viewType = 'search';
     setActiveTab();
@@ -274,7 +452,6 @@ function setupSearch() {
     if (!input.value && !state.search) return;
     input.value = '';
     state.search = '';
-    // If we were on Search, bounce back to New
     if (state.viewType === 'search') state.viewType = 'new';
     setActiveTab();
     clearFeed();
@@ -309,7 +486,7 @@ function setupManageSites() {
 function setupInfiniteScroll() {
   window.addEventListener('scroll', ()=>{
     const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 800;
-    if (nearBottom && !state.loading) fetchBatch();
+    if (nearBottom && !state.loading && !state.noMoreResults) fetchBatch();
   });
 }
 
@@ -317,7 +494,6 @@ function setupInfiniteScroll() {
 window.isLocalFavorite = (post) => (window.__localFavsSet || new Set()).has(itemKey(post));
 window.toggleLocalFavorite = async (post) => {
   const res = await window.api.toggleLocalFavorite(post);
-  // Keep an in-memory set so buttons reflect status immediately
   window.__localFavsSet = window.__localFavsSet || new Set(await window.api.getLocalFavoriteKeys());
   if (res?.ok) {
     if (res.favorited) window.__localFavsSet.add(res.key);
@@ -331,7 +507,6 @@ window.toggleLocalFavorite = async (post) => {
 
 async function init() {
   await loadConfig();
-  // warm the local favorites set for UI toggles
   try {
     const keys = await window.api.getLocalFavoriteKeys();
     window.__localFavsSet = new Set(keys || []);
