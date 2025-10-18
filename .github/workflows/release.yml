@@ -63,7 +63,6 @@ jobs:
           name: linux
           path: release-linux
 
-  # Tag-only. Won't block if it fails.
   windows-exe:
     if: startsWith(github.ref, 'refs/tags/')
     continue-on-error: true
@@ -95,7 +94,6 @@ jobs:
           name: windows
           path: release-win
 
-  # Tag-only. Won't block if it fails (e.g., npm missing inside flatpak-builder).
   flatpak:
     if: startsWith(github.ref, 'refs/tags/')
     continue-on-error: true
@@ -103,37 +101,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Flatpak tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder elfutils
-
       - name: Add Flathub remote (user scope)
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak remotes -d
-
-      # Optional: preinstall SDKs. OK if this fails — job is continue-on-error anyway.
       - name: Preinstall Flatpak SDKs (optional)
         run: |
           flatpak --user install -y --noninteractive flathub \
             org.freedesktop.Platform//23.08 \
             org.freedesktop.Sdk//23.08
-
       - name: Build Flatpak
         run: |
           mkdir -p flatpak-build flatpak-repo
           flatpak-builder --force-clean --user --install-deps-from=flathub flatpak-build flatpak/${{ env.APP_ID }}.yaml --repo=flatpak-repo
           flatpak build-bundle flatpak-repo ${{ env.APP_NAME }}.flatpak ${{ env.APP_ID }} stable
-
       - name: Collect artifacts
         run: |
           mkdir -p release-flatpak
           cp ${{ env.APP_NAME }}.flatpak release-flatpak/
           cp docs/INSTALL.md release-flatpak/INSTALL.md || true
           ls -la release-flatpak
-
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak
@@ -200,12 +191,12 @@ jobs:
               -e "s|@@REPO@@|${REPO}|g" \
               aur/PKGBUILD.in > aur-out/PKGBUILD
 
-      - name: Compute sha256sums for source tarball
+      - name: Compute sha256sums for release tarball (-bin)
         if: steps.check.outputs.publish == 'true'
         run: |
-          SRC_URL="https://github.com/${OWNER}/${REPO}/archive/refs/tags/v${VERSION}.tar.gz"
-          curl -L "$SRC_URL" -o "aur-out/${PKGNAME}-${VERSION}.tar.gz"
-          SHA=$(sha256sum "aur-out/${PKGNAME}-${VERSION}.tar.gz" | awk '{print $1}')
+          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/StreamBooru-${VERSION}-linux-x64.tar.gz"
+          curl -L "$ASSET_URL" -o "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz"
+          SHA=$(sha256sum "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz" | awk '{print $1}')
           sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
 
       - name: Create .SRCINFO
@@ -228,6 +219,8 @@ jobs:
           pkgbuild: aur-out/PKGBUILD
           assets: |
             aur-out/.SRCINFO
+            aur/streambooru.sh
+            aur/streambooru.desktop
           commit_username: "github-actions[bot]"
           commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

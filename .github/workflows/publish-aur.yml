@@ -31,21 +31,7 @@ jobs:
           echo "owner=${GITHUB_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
           echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
 
-      - name: Check AUR secrets
-        id: check
-        shell: bash
-        run: |
-          publish=true
-          if [ -z "${AUR_SSH_PRIVATE_KEY}" ] || [ -z "${AUR_USERNAME}" ] || [ -z "${AUR_PACKAGE}" ]; then
-            publish=false
-          fi
-          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
-          if [ "${publish}" != "true" ]; then
-            echo "AUR secrets missing; skipping AUR publish." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Generate PKGBUILD from template
-        if: steps.check.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           OWNER:   ${{ steps.meta.outputs.owner }}
@@ -59,21 +45,18 @@ jobs:
               -e "s|@@REPO@@|${REPO}|g" \
               aur/PKGBUILD.in > aur-out/PKGBUILD
 
-      - name: Compute sha256sums for source tarball
-        if: steps.check.outputs.publish == 'true'
+      - name: Compute sha256sums for release tarball (-bin)
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           OWNER:   ${{ steps.meta.outputs.owner }}
           REPO:    ${{ steps.meta.outputs.repo }}
-          PKGNAME: ${{ secrets.AUR_PACKAGE }}
         run: |
-          SRC_URL="https://github.com/${OWNER}/${REPO}/archive/refs/tags/v${VERSION}.tar.gz"
-          curl -L "$SRC_URL" -o "aur-out/${PKGNAME}-${VERSION}.tar.gz"
-          SHA=$(sha256sum "aur-out/${PKGNAME}-${VERSION}.tar.gz" | awk '{print $1}')
+          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/StreamBooru-${VERSION}-linux-x64.tar.gz"
+          curl -L "$ASSET_URL" -o "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz"
+          SHA=$(sha256sum "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz" | awk '{print $1}')
           sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
 
       - name: Create .SRCINFO
-        if: steps.check.outputs.publish == 'true'
         run: |
           docker run --rm \
             -u "$(id -u):$(id -g)" \
@@ -85,13 +68,14 @@ jobs:
           ls -la aur-out
 
       - name: Publish to AUR
-        if: steps.check.outputs.publish == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
         with:
           pkgname: ${{ secrets.AUR_PACKAGE }}
           pkgbuild: aur-out/PKGBUILD
           assets: |
             aur-out/.SRCINFO
+            aur/streambooru.sh
+            aur/streambooru.desktop
           commit_username: "github-actions[bot]"
           commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
