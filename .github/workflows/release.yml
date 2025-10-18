@@ -141,13 +141,76 @@ jobs:
     needs: [prep, linux-deb-and-tar, windows-exe, flatpak]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout (to read CHANGELOG.md)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
+
       - name: List artifacts (some may be missing if a job failed)
         run: find ./artifacts -type f -maxdepth 3 -print || true
-      - name: Create GitHub Release and upload assets
+
+      - name: Extract release notes from CHANGELOG.md (if present)
+        id: gen_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          FILES=("CHANGELOG.md" "docs/CHANGELOG.md")
+          OUT="RELEASE_NOTES.md"
+          found=false
+
+          for f in "${FILES[@]}"; do
+            if [[ -f "$f" ]]; then
+              # Extract section that starts with "## vX.Y.Z" (or "## X.Y.Z") until the next "## "
+              awk -v ver="$VER" '
+                BEGIN {
+                  # allow headings like "## v1.2.3" or "## 1.2.3"
+                  pat1="^##[[:space:]]*v" ver "([[:space:]]|$)"
+                  pat2="^##[[:space:]]*"  ver "([[:space:]]|$)"
+                  insec=0
+                }
+                {
+                  if ($0 ~ /^##[[:space:]]/) {
+                    if (insec) exit
+                    if ($0 ~ pat1 || $0 ~ pat2) { insec=1; next }
+                  }
+                  if (insec) print
+                }
+              ' "$f" > "$OUT"
+              if [[ -s "$OUT" ]]; then
+                echo "has_notes=true" >> "$GITHUB_OUTPUT"
+                echo "notes_path=$OUT" >> "$GITHUB_OUTPUT"
+                found=true
+                break
+              fi
+            fi
+          done
+
+          if [[ "$found" != "true" ]]; then
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (with CHANGELOG body)
+        if: steps.gen_notes.outputs.has_notes == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: ${{ steps.gen_notes.outputs.notes_path }}
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/linux/**
+            artifacts/windows/**
+            artifacts/flatpak/**
+
+      - name: Create GitHub Release (auto-generated notes)
+        if: steps.gen_notes.outputs.has_notes != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
