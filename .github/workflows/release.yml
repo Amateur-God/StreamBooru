@@ -136,7 +136,6 @@ jobs:
           name: flatpak
           path: release-flatpak
 
-  # Android job (no "if: secrets..." expressions)
   android:
     needs: prep
     runs-on: ubuntu-latest
@@ -165,6 +164,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Make Gradle wrapper executable
+        working-directory: android
+        run: chmod +x gradlew
 
       - name: Build Debug APK
         working-directory: android
@@ -198,6 +201,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
+            chmod +x gradlew
             ./gradlew clean
             ./gradlew \
               bundleRelease \
@@ -303,7 +307,7 @@ jobs:
           overwrite_files: true
           fail_on_unmatched_files: false
           files: |
-            artifacts/linux**
+            artifacts/linux/**
             artifacts/windows/**
             artifacts/flatpak/**
             artifacts/android/**

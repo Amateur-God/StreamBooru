@@ -36,6 +36,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Make Gradle wrapper executable
+        working-directory: android
+        run: chmod +x gradlew
+
       - name: Build Debug APK
         working-directory: android
         run: ./gradlew assembleDebug
@@ -47,7 +51,6 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
-      # Decode keystore only when secret exists (shell guard; no "if:" expression)
       - name: Decode Keystore (PKCS#12)
         run: |
           if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
@@ -59,7 +62,6 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
 
-      # Build signed release only when secret exists (shell guard; no "if:" expression)
       - name: Build Signed Release (AAB + APK)
         working-directory: android
         env:
@@ -70,6 +72,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
+            chmod +x gradlew
             ./gradlew clean
             ./gradlew \
               bundleRelease \
