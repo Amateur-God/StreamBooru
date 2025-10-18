@@ -1,0 +1,193 @@
+/* Mobile-only overrides for StreamBooru
+   - Hides top-bar tabs/search on mobile (they're inside the menu)
+   - Shows hamburger
+   - Styles the mobile menu
+   - Improves touch scroll with touch-action and overscroll-behavior
+*/
+
+:root { --topbar-h: 56px; --acc: #4c8dff; }
+
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+  /* Prevent scroll chaining/bounce into parent and reduce “rubber band” */
+  overscroll-behavior-y: contain;
+  /* Make vertical panning the primary gesture everywhere */
+  touch-action: pan-y pinch-zoom;
+}
+
+/* Keep the top bar visible and compact */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: calc(env(safe-area-inset-top, 0px) + 8px) 10px 8px 10px;
+  background: rgba(17,17,17,0.8);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Title small, non-wrapping */
+.topbar .left { order: 1; display: flex; align-items: center; gap: 10px; }
+.topbar .left h1 { font-size: 18px; margin: 0; white-space: nowrap; }
+
+/* Hide desktop actions + center content on mobile; show hamburger instead */
+.topbar .right { display: none !important; }
+.hamburger {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 6px 16px rgba(0,0,0,0.35);
+}
+.hamburger:active { transform: translateY(1px); }
+
+/* Hide tabs and search from the top bar on mobile — they move into the menu */
+.topbar .center { order: 2; width: 100%; flex: 1 0 100%; }
+.topbar .center .tabs,
+.topbar .center .search { display: none !important; }
+
+/* If tabs exist in any view, let them scroll horizontally without stealing vertical pan */
+.tabs { touch-action: pan-x pinch-zoom; }
+
+/* Mobile menu panel + backdrop */
+.menu-backdrop[hidden],
+.menu-panel[hidden] { display: none !important; }
+
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 1200;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  /* Avoid body scroll when menu is open by intercepting gestures on backdrop */
+  touch-action: none;
+}
+
+.menu-panel {
+  position: fixed;
+  top: calc(var(--topbar-h) + env(safe-area-inset-top, 0px) + 10px);
+  left: 10px;
+  right: 10px;
+  z-index: 1300;
+  width: auto;
+  max-width: 440px;
+  margin-left: 0;
+  margin-right: auto;
+  max-height: calc(100vh - var(--topbar-h) - 30px);
+  overflow: auto;
+  background: linear-gradient(180deg, rgba(26,26,28,0.92), rgba(18,18,20,0.92));
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow:
+    0 12px 40px rgba(0,0,0,0.6),
+    0 2px 0 rgba(255,255,255,0.04) inset;
+  /* Allow vertical panning inside the menu */
+  touch-action: pan-y;
+}
+
+/* Section headings */
+.menu-title {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  opacity: 0.95;
+  margin: 8px 6px 6px 6px;
+}
+
+/* Group spacing with subtle divider */
+.menu-section + .menu-section {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+/* Menu items with icons */
+.menu-item {
+  --bg: rgba(255,255,255,0.06);
+  --bd: rgba(255,255,255,0.12);
+  --bg-pressed: rgba(255,255,255,0.10);
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  padding: 14px 14px 14px 46px; /* left space for icon */
+  margin: 8px 4px;
+  border-radius: 12px;
+  border: 1px solid var(--bd);
+  background: linear-gradient(180deg, rgba(255,255,255,0.08), var(--bg));
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 6px 16px rgba(0,0,0,0.25);
+  min-height: 48px; /* comfortable touch target */
+}
+.menu-item:active { background: var(--bg-pressed); transform: translateY(1px); }
+
+/* Icon via CSS mask, defined per-item via --mi var; see earlier CSS where IDs are assigned */
+
+/* Menu search form */
+.menu-search {
+  display: flex;
+  gap: 8px;
+  margin: 8px 4px 4px;
+}
+.menu-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.35);
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+}
+.menu-search input::placeholder { color: rgba(255,255,255,0.5); }
+.menu-search input:focus {
+  outline: none;
+  border-color: var(--acc);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--acc) 32%, transparent);
+}
+.menu-search button {
+  flex: 0 0 auto;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.06));
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 6px 16px rgba(0,0,0,0.25);
+}
+.menu-search button:active { transform: translateY(1px); }
+
+/* Feed: reinforce that vertical panning is the gesture */
+#feed { touch-action: pan-y; }
+
+/* Images: prefer vertical pan and disable long-press drag ghosting behaviors */
+.card .thumb img {
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Denser grid on mobile */
+.grid {
+  padding: 8px;
+  grid-gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+/* Avoid content hidden behind gesture bar */
+body { padding-bottom: env(safe-area-inset-bottom, 0px); }

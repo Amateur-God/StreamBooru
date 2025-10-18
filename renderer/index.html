@@ -3,13 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <title>StreamBooru</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https: http:;">
   <link rel="stylesheet" href="./styles.css" />
+  <!-- Mobile layout and hamburger reveal -->
+  <link rel="stylesheet" href="./mobile.css" media="(max-width: 900px)" />
 </head>
 <body>
+  <!-- Load platform shim early -->
+  <script src="./js/platform.js"></script>
+
   <header class="topbar">
     <div class="left">
       <h1>StreamBooru</h1>
+      <!-- Hamburger button (revealed only by mobile.css) -->
+      <button id="menu-toggle" class="hamburger" aria-label="Open menu" aria-expanded="false" aria-controls="menu-panel">☰</button>
     </div>
 
     <div class="center">
@@ -28,10 +36,37 @@
     </div>
 
     <div class="right">
+      <!-- Desktop actions (hidden on mobile by CSS) -->
       <button id="btn-download-all" class="accent" title="Left-click to download all. Right-click or Shift/Alt+click for options.">Download All</button>
       <button id="btn-manage-sites" class="ghost">Manage Sites</button>
     </div>
   </header>
+
+  <!-- Mobile menu overlay -->
+  <div id="menu-backdrop" class="menu-backdrop" hidden></div>
+  <nav id="menu-panel" class="menu-panel" hidden aria-label="Mobile menu">
+    <div class="menu-section">
+      <div class="menu-title">Browse</div>
+      <button id="mnu-tab-new" class="menu-item">New</button>
+      <button id="mnu-tab-popular" class="menu-item">Popular</button>
+      <button id="mnu-tab-search" class="menu-item">Search</button>
+      <button id="mnu-tab-faves" class="menu-item">Favorites</button>
+    </div>
+
+    <div class="menu-section">
+      <div class="menu-title">Search</div>
+      <form id="mnu-search-form" class="menu-search" autocomplete="off">
+        <input id="mnu-tag-search" type="text" placeholder="Search tags (e.g., 1girl blue_hair)" />
+        <button id="mnu-search-go" type="submit">Go</button>
+      </form>
+    </div>
+
+    <div class="menu-section">
+      <div class="menu-title">Actions</div>
+      <button id="mnu-download-all" class="menu-item">Download All</button>
+      <button id="mnu-manage-sites" class="menu-item">Manage Sites</button>
+    </div>
+  </nav>
 
   <main id="feed" class="grid"></main>
 
@@ -64,6 +99,7 @@
   <script src="./components/siteManager.js"></script>
   <script src="./components/postCard.js"></script>
   <script src="./components/lightbox.js"></script>
+  <script src="./js/mobile-menu.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

@@ -463,3 +463,7 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
   #name-template { max-width: 200px; }
   #btn-download-all::after { display: none; } /* hide hint on small screens */
 }
+
+.hamburger {
+  display: none;
+}

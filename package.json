@@ -1,7 +1,7 @@
 {
   "name": "streambooru",
-  "version": "0.3.1",
-  "description": "StreamBooru — Electron app to browse multiple booru sites with New and Popular feeds, merged across sources.",
+  "version": "0.4.0",
+  "description": "StreamBooru – Electron app to browse multiple booru sites with New and Popular feeds, merged across sources.",
   "main": "electron/main.js",
   "author": {
     "name": "Amateur-God",
@@ -12,11 +12,25 @@
     "start": "electron .",
     "dev": "SB_DEV=1 electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "android:add": "npx cap add android",
+    "android:sync": "npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:build": "cd android && ./gradlew assembleDebug",
+    "android:release": "cd android && ./gradlew bundleRelease"
   },
   "devDependencies": {
+    "@capacitor/cli": "^6.2.1",
     "electron": "^35.7.5",
     "electron-builder": "^24.13.3"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@capacitor-community/http": "^1.4.1",
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/app": "^6.0.2",
+    "@capacitor/browser": "^6.0.5",
+    "@capacitor/core": "^6.2.1",
+    "@capacitor/filesystem": "^6.0.3",
+    "@capacitor/share": "^6.0.3"
+  }
 }

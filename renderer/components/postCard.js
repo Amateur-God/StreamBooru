@@ -3,8 +3,53 @@
     if (url) window.api.openExternal(url);
   };
 
-  // Prefer larger sample/large image for sharp cards; preview last.
+  // Prefer larger sample/large image; preview last.
   const pickThumb = (post) => post.sample_url || post.file_url || post.preview_url || '';
+
+  // Tap helper: only fire on “true tap” (short + minimal move), not while scrolling
+  function onTap(el, handler, opts = {}) {
+    const maxMove = opts.maxMove ?? 10;   // px
+    const maxTime = opts.maxTime ?? 350;  // ms
+    let startX = 0, startY = 0, t0 = 0, moved = 0, active = false;
+
+    const onDown = (e) => {
+      active = true;
+      const p = e.touches ? e.touches[0] : e;
+      startX = p.clientX; startY = p.clientY; t0 = Date.now(); moved = 0;
+    };
+    const onMove = (e) => {
+      if (!active) return;
+      const p = e.touches ? e.touches[0] : e;
+      const dx = p.clientX - startX;
+      const dy = p.clientY - startY;
+      moved = Math.max(moved, Math.hypot(dx, dy));
+    };
+    const onUp = (e) => {
+      if (!active) return;
+      active = false;
+      const dt = Date.now() - t0;
+      if (moved <= maxMove && dt <= maxTime) handler(e);
+    };
+
+    el.addEventListener('pointerdown', onDown, { passive: true });
+    el.addEventListener('pointermove', onMove, { passive: true });
+    el.addEventListener('pointerup', onUp, { passive: true });
+    el.addEventListener('pointercancel', () => { active = false; }, { passive: true });
+  }
+
+  // Try to proxy an image that failed due to hotlink/CORS using native HTTP -> data URL
+  async function tryProxyImage(imgEl, url) {
+    try {
+      if (!window.api || typeof window.api.proxyImage !== 'function') return;
+      const prox = await window.api.proxyImage(url);
+      if (prox && prox.ok && prox.url) {
+        imgEl.src = prox.url;
+        imgEl.removeAttribute('srcset');
+      }
+    } catch (e) {
+      console.error('proxyImage failed', e);
+    }
+  }
 
   const buildActions = (post, idx) => {
     const wrap = document.createElement('div');
@@ -60,18 +105,26 @@
     img.loading = 'lazy';
     img.decoding = 'async';
     img.alt = String(post?.id ?? '');
+    img.draggable = false;
+    img.style.touchAction = 'pan-y';
+    img.style.userSelect = 'none';
+    img.style.webkitUserDrag = 'none';
+
     const thumbUrl = pickThumb(post);
     img.src = thumbUrl;
 
-    // Provide a simple srcset so the browser can pick a sharper file when available
+    // srcset so the browser can pick a sharper file when available
     const candidates = [];
     if (post.sample_url) candidates.push(`${post.sample_url} 1x`);
     if (post.file_url && post.file_url !== post.sample_url) candidates.push(`${post.file_url} 2x`);
     if (candidates.length) img.srcset = candidates.join(', ');
 
-    img.addEventListener('click', () => {
-      if (window.openLightbox) window.openLightbox(post);
-    });
+    // Fallback for hotlink/CORS
+    img.addEventListener('error', () => tryProxyImage(img, thumbUrl));
+
+    // Open lightbox on true tap (not during scroll)
+    onTap(img, () => { if (window.openLightbox) window.openLightbox(post); });
+
     thumb.appendChild(img);
 
     const meta = document.createElement('div');

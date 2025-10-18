@@ -3,6 +3,39 @@
 All notable changes to this project will be documented in this file.
 The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 
+## [v0.4.0] — 2025-10-18
+
+### Highlights
+- First Android APK available (signed Release AAB and APK; Debug APK also provided).
+- Mobile UI with a touch‑friendly hamburger menu.
+- Per‑site rating honored from the Site Manager dropdown.
+
+### Added
+- Android app (Capacitor):
+  - Native HTTP path (CapacitorHttp) to bypass CORS for API calls and image proxying.
+  - proxyImage: converts hotlink‑protected media to data URLs on‑device.
+  - Local favorites storage on Android (no account required).
+- Rating handling (Android/Web adapter):
+  - Uses each site’s rating selection from the Site Manager (safe/questionable/explicit/any) unless the search already contains a `rating:` token.
+  - Safety net: when the adapter injects a rating, results are also filtered client‑side to that rating.
+- Mobile menu:
+  - Consolidated actions: Browse (New/Popular/Search/Favorites), Search box, Manage Sites, and Download actions.
+  - Larger touch targets, visual polish (icons, blur/glass), and proper focus/escape behavior.
+
+### Build/CI
+- Android CI workflow:
+  - Always uploads a Debug APK artifact.
+  - When signing secrets are present (PKCS#12 keystore), also builds and uploads signed Release AAB and APK.
+- Release workflow:
+  - Can collect Android artifacts and attach them to GitHub Releases alongside desktop builds.
+
+### Known limitations (Android)
+- Bulk “Download All” is not supported (single‑item downloads only).
+- “Favorite on site” (remote/booru‑side) is not available in the Android build.
+- Some sites may still rate‑limit or use anti‑bot protections; the native HTTP path helps with CORS but can’t bypass site‑level restrictions.
+
+[v0.4.0]: https://github.com/Amateur-God/StreamBooru/releases/tag/v0.4.0
+
 
 ## [v0.3.1] — 2025-10-18
 
