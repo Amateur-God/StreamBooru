@@ -101,30 +101,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Flatpak tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder elfutils
+
       - name: Add Flathub remote (user scope)
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak remotes -d
+
       - name: Preinstall Flatpak SDKs (optional)
         run: |
           flatpak --user install -y --noninteractive flathub \
             org.freedesktop.Platform//23.08 \
             org.freedesktop.Sdk//23.08
+
       - name: Build Flatpak
         run: |
           mkdir -p flatpak-build flatpak-repo
           flatpak-builder --force-clean --user --install-deps-from=flathub flatpak-build flatpak/${{ env.APP_ID }}.yaml --repo=flatpak-repo
           flatpak build-bundle flatpak-repo ${{ env.APP_NAME }}.flatpak ${{ env.APP_ID }} stable
+
       - name: Collect artifacts
         run: |
           mkdir -p release-flatpak
           cp ${{ env.APP_NAME }}.flatpak release-flatpak/
           cp docs/INSTALL.md release-flatpak/INSTALL.md || true
           ls -la release-flatpak
+
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak
@@ -158,7 +164,7 @@ jobs:
     needs: [prep, create-release]
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.prep.outputs.version }}
+      VERSION: ${{ needs.prep.outputs.version }} # e.g., 0.1.9
       OWNER:   ${{ needs.prep.outputs.owner }}
       REPO:    ${{ needs.prep.outputs.repo }}
       PKGNAME: ${{ secrets.AUR_PACKAGE }}
@@ -194,9 +200,9 @@ jobs:
       - name: Compute sha256sums for release tarball (-bin)
         if: steps.check.outputs.publish == 'true'
         run: |
-          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/StreamBooru-${VERSION}-linux-x64.tar.gz"
-          curl -L "$ASSET_URL" -o "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz"
-          SHA=$(sha256sum "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz" | awk '{print $1}')
+          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/streambooru-${VERSION}.tar.gz"
+          curl -L "$ASSET_URL" -o "aur-out/streambooru-${VERSION}.tar.gz"
+          SHA=$(sha256sum "aur-out/streambooru-${VERSION}.tar.gz" | awk '{print $1}')
           sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
 
       - name: Create .SRCINFO

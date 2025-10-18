@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish (e.g., v0.2.3)"
+        description: "Tag to publish (e.g., v0.1.9)"
         required: true
         type: string
 
@@ -26,7 +26,7 @@ jobs:
       - name: Parse metadata
         id: meta
         run: |
-          REF="${{ inputs.tag }}"
+          REF="${{ inputs.tag }}"          # e.g., v0.1.9
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
           echo "owner=${GITHUB_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
           echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
@@ -51,9 +51,9 @@ jobs:
           OWNER:   ${{ steps.meta.outputs.owner }}
           REPO:    ${{ steps.meta.outputs.repo }}
         run: |
-          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/StreamBooru-${VERSION}-linux-x64.tar.gz"
-          curl -L "$ASSET_URL" -o "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz"
-          SHA=$(sha256sum "aur-out/StreamBooru-${VERSION}-linux-x64.tar.gz" | awk '{print $1}')
+          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/streambooru-${VERSION}.tar.gz"
+          curl -L "$ASSET_URL" -o "aur-out/streambooru-${VERSION}.tar.gz"
+          SHA=$(sha256sum "aur-out/streambooru-${VERSION}.tar.gz" | awk '{print $1}')
           sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
 
       - name: Create .SRCINFO
