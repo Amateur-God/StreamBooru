@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, net, Menu, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 
 /* Dev flag for verbose logging */
 const isDev = process.env.SB_DEV === '1';
@@ -65,7 +66,6 @@ function setupHotlinkHeaders(sess) {
     }
   });
 
-  // Lightweight dev logging for Gelbooru/Derpibooru (and common clones)
   if (isDev) {
     const filt = { urls: ['*://*/*'] };
     sess.webRequest.onCompleted(filt, (d) => {
@@ -136,6 +136,7 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 /* --------------------------------- Config --------------------------------- */
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const FAVORITES_PATH = path.join(app.getPath('userData'), 'favorites.json');
+const ACCOUNT_PATH = path.join(app.getPath('userData'), 'account.json');
 
 function readConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -185,6 +186,21 @@ function writeConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
 }
 
+/* ------------------------------- Account I/O ------------------------------- */
+function readAccount() {
+  if (!fs.existsSync(ACCOUNT_PATH)) {
+    const def = { serverBase: 'https://streambooru.co.uk', token: '', user: null };
+    fs.writeFileSync(ACCOUNT_PATH, JSON.stringify(def, null, 2), 'utf-8');
+    return def;
+  }
+  try { return JSON.parse(fs.readFileSync(ACCOUNT_PATH, 'utf-8')); }
+  catch { return { serverBase: 'https://streambooru.co.uk', token: '', user: null }; }
+}
+function writeAccount(acc) {
+  const base = acc?.serverBase || 'https://streambooru.co.uk';
+  fs.writeFileSync(ACCOUNT_PATH, JSON.stringify({ serverBase: base, token: acc?.token || '', user: acc?.user || null }, null, 2), 'utf-8');
+}
+
 /* ------------------------------- Favorites I/O ------------------------------- */
 function favKey(post) { return `${post?.site?.baseUrl || ''}#${post?.id}`; }
 function loadFavorites() {
@@ -199,7 +215,7 @@ function saveFavorites(arr) {
 /* --------------------------------- HTTP --------------------------------- */
 function applyDefaultHeaders(request, url, headers = {}) {
   const defaultHeaders = {
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 StreamBooru/0.3 Electron/31',
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 StreamBooru/0.4 Electron/31',
     Accept: '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
     Referer: url
@@ -298,7 +314,7 @@ function httpDelete(url, headers = {}) {
 const adapters = {
   danbooru: new Danbooru(httpGetJson, httpPostForm, httpDelete),
   moebooru: new Moebooru(httpGetJson, httpPostForm),
-  gelbooru: new Gelbooru(httpGetJson, httpGetText), // pass httpGetText for XML fallback
+  gelbooru: new Gelbooru(httpGetJson, httpGetText),
   e621: new E621(httpGetJson),
   derpibooru: new Derpibooru(httpGetJson)
 };
@@ -331,7 +347,7 @@ ipcMain.handle('booru:fetch', async (_evt, payload) => {
 // Open external
 ipcMain.handle('openExternal', async (_evt, url) => { if (!url) return false; await shell.openExternal(url); return true; });
 
-// Download image (with referer)
+// Download image
 ipcMain.handle('download:image', async (_evt, payload) => {
   const { url, siteName = 'unknown', fileName = '' } = payload || {};
   if (!url) return { ok: false, error: 'No URL' };
@@ -375,14 +391,13 @@ ipcMain.handle('download:image', async (_evt, payload) => {
   return { ok: true, path: savePath };
 });
 
-// NEW: Bulk download all current results
+// Bulk download
 ipcMain.handle('download:bulk', async (_evt, payload) => {
   const { items = [], options = {} } = payload || {};
   if (!Array.isArray(items) || items.length === 0) {
     return { ok: false, error: 'No items to download' };
   }
 
-  // Choose base save directory once
   const baseDir = dialog.showOpenDialogSync(win, {
     title: 'Choose folder to save images',
     properties: ['openDirectory', 'createDirectory']
@@ -390,7 +405,6 @@ ipcMain.handle('download:bulk', async (_evt, payload) => {
   if (!baseDir || !baseDir[0]) return { ok: false, cancelled: true };
   const basePath = baseDir[0];
 
-  // Reuse/extend referer map
   const refererMap = new Map([
     ['cdn.donmai.us', 'https://danbooru.donmai.us/'],
     ['danbooru.donmai.us', 'https://danbooru.donmai.us/'],
@@ -408,7 +422,6 @@ ipcMain.handle('download:bulk', async (_evt, payload) => {
   const sanitize = (s) => String(s || '').replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').slice(0, 200);
   const subfolder = !!options.subfolderBySite;
 
-  // Simple queue with limited concurrency
   const concurrency = Number(options.concurrency || 3);
   let index = 0;
   const results = [];
@@ -461,7 +474,7 @@ ipcMain.handle('download:bulk', async (_evt, payload) => {
   return { ok: true, saved, failed, basePath };
 });
 
-// Favorites (remote)
+// Favorites (remote APIs for sites)
 ipcMain.handle('booru:favorite', async (_evt, payload) => {
   const { site, postId, action } = payload || {};
   if (!site || !site.type || !adapters[site.type]) return { ok: false, error: 'Unsupported site' };
@@ -585,6 +598,23 @@ ipcMain.handle('favorites:list', async () => {
     .map((x) => ({ ...x.post, _added_at: x.added_at || 0 }));
 });
 
+async function pushFavoriteRemote(key, post, added_at) {
+  const acc = readAccount();
+  if (!acc.serverBase || !acc.token) return { ok: false, skipped: true };
+  try {
+    const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites/${encodeURIComponent(key)}`;
+    const req = net.request({ url, method: 'PUT' });
+    applyDefaultHeaders(req, url, { 'Content-Type': 'application/json', Authorization: `Bearer ${acc.token}` });
+    const body = JSON.stringify({ post, added_at: added_at || Date.now() });
+    return await new Promise((resolve) => {
+      req.on('response', (res) => { res.on('data', ()=>{}); res.on('end', ()=> resolve({ ok: res.statusCode < 400 })); });
+      req.on('error', ()=> resolve({ ok: false }));
+      req.write(body);
+      req.end();
+    });
+  } catch { return { ok: false }; }
+}
+
 ipcMain.handle('favorites:toggle', async (_evt, { post }) => {
   if (!post || !post.id) return { ok: false, error: 'No post' };
   const key = favKey(post);
@@ -598,7 +628,185 @@ ipcMain.handle('favorites:toggle', async (_evt, { post }) => {
   }
   items.push({ key, added_at: now, post });
   saveFavorites(items);
+  // optional remote push if logged in
+  setImmediate(() => pushFavoriteRemote(key, post, now));
   return { ok: true, favorited: true, key, added_at: now };
 });
 
 ipcMain.handle('favorites:clear', async () => { saveFavorites([]); return { ok: true }; });
+
+/* --------------------------- Account + Sync IPC --------------------------- */
+ipcMain.handle('account:get', async () => {
+  const acc = readAccount();
+  return { serverBase: acc.serverBase || 'https://streambooru.co.uk', token: acc.token || '', user: acc.user || null, loggedIn: !!(acc.token) };
+});
+
+ipcMain.handle('account:setServer', async (_evt, base) => {
+  const acc = readAccount();
+  const val = String(base || '').trim() || 'https://streambooru.co.uk';
+  acc.serverBase = val;
+  writeAccount(acc);
+  return { ok: true, serverBase: acc.serverBase };
+});
+
+ipcMain.handle('account:logout', async () => {
+  const acc = readAccount();
+  writeAccount({ serverBase: acc.serverBase || 'https://streambooru.co.uk', token: '', user: null });
+  return { ok: true };
+});
+
+ipcMain.handle('account:loginLocal', async (_evt, { username, password }) => {
+  const acc = readAccount();
+  const serverBase = (acc.serverBase || '').replace(/\/+$/,'');
+  if (!serverBase) return { ok: false, error: 'Set server base URL first' };
+  if (!username || !password) return { ok: false, error: 'Missing username/password' };
+
+  try {
+    const url = `${serverBase}/auth/local/login`;
+    const req = net.request({ url, method: 'POST' });
+    applyDefaultHeaders(req, url, { 'Content-Type': 'application/json', Accept: 'application/json' });
+    const body = JSON.stringify({ username, password });
+    let data = '';
+    const result = await new Promise((resolve) => {
+      req.on('response', (res) => {
+        res.on('data', (c)=> data += c);
+        res.on('end', ()=> resolve({ status: res.statusCode || 0 }));
+      });
+      req.on('error', ()=> resolve({ status: 0 }));
+      req.write(body);
+      req.end();
+    });
+    if (result.status >= 400 || result.status === 0) return { ok: false, error: 'Login failed' };
+    let parsed = {};
+    try { parsed = JSON.parse(data); } catch {}
+    const token = parsed.token || parsed.jwt || '';
+    if (!token) return { ok: false, error: 'No token returned' };
+
+    const a = readAccount();
+    a.token = token;
+    writeAccount(a);
+
+    try {
+      const meUrl = `${serverBase}/api/me`;
+      const r = await httpGetJson(meUrl, { Authorization: `Bearer ${token}` });
+      if (r?.ok && r.user) { a.user = r.user; writeAccount(a); }
+    } catch {}
+    return { ok: true, user: readAccount().user || null };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle('account:loginDiscord', async () => {
+  const acc = readAccount();
+  const serverBase = (acc.serverBase || '').replace(/\/+$/,'');
+  if (!serverBase) return { ok: false, error: 'Set server base URL first' };
+
+  const srv = http.createServer((req, res) => {
+    try {
+      const u = new URL(req.url, `http://${req.headers.host}`);
+      if (u.pathname === '/callback') {
+        const token = u.searchParams.get('token') || '';
+        if (token) {
+          const a = readAccount();
+          a.token = token;
+          writeAccount(a);
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end('<h3>Login complete. You can close this window.</h3>');
+          srv.close();
+          return;
+        }
+      }
+      res.statusCode = 400; res.end('Bad request');
+    } catch {
+      res.statusCode = 500; res.end('Error');
+    }
+  });
+
+  const listenP = new Promise((resolve, reject) => {
+    srv.listen(0, '127.0.0.1', () => resolve());
+    srv.on('error', reject);
+  });
+  await listenP;
+  const port = srv.address().port;
+  const redirect = `http://127.0.0.1:${port}/callback`;
+  const url = `${serverBase}/auth/discord?redirect_uri=${encodeURIComponent(redirect)}`;
+  await shell.openExternal(url);
+
+  const result = await new Promise((resolve) => {
+    const t = setTimeout(() => { try { srv.close(); } catch {} resolve({ ok: false, error: 'Timeout' }); }, 120000);
+    srv.on('close', async () => {
+      clearTimeout(t);
+      const a = readAccount();
+      if (!a.token) return resolve({ ok: false, error: 'Login failed' });
+      try {
+        const meUrl = `${serverBase}/api/me`;
+        const r = await httpGetJson(meUrl, { Authorization: `Bearer ${a.token}` });
+        if (r?.ok && r.user) { a.user = r.user; writeAccount(a); }
+      } catch {}
+      resolve({ ok: true, user: readAccount().user || null });
+    });
+  });
+
+  return result;
+});
+
+ipcMain.handle('sync:fav:pull', async () => {
+  const acc = readAccount();
+  if (!acc.serverBase || !acc.token) return { ok: false, error: 'Not logged in' };
+  try {
+    const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites`;
+    const req = net.request({ url, method: 'GET' });
+    applyDefaultHeaders(req, url, { Accept: 'application/json', Authorization: `Bearer ${acc.token}` });
+    let data = '';
+    const items = await new Promise((resolve, reject) => {
+      req.on('response', (res) => {
+        res.on('data', (c) => data += c);
+        res.on('end', () => {
+          try {
+            const j = JSON.parse(data);
+            if (!j?.ok) return reject(new Error('Server error'));
+            resolve(Array.isArray(j.items) ? j.items : []);
+          } catch (e) { reject(e); }
+        });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    const local = loadFavorites();
+    const byKey = new Map(local.map(x => [x.key, x]));
+    let added = 0;
+    for (const it of items) {
+      if (!byKey.has(it.key) && it.post) {
+        byKey.set(it.key, { key: it.key, added_at: Number(it.added_at) || Date.now(), post: it.post });
+        added++;
+      }
+    }
+    saveFavorites([...byKey.values()]);
+    return { ok: true, added };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle('sync:fav:push', async () => {
+  const acc = readAccount();
+  if (!acc.serverBase || !acc.token) return { ok: false, error: 'Not logged in' };
+  try {
+    const items = loadFavorites();
+    const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites/bulk_upsert`;
+    const req = net.request({ url, method: 'POST' });
+    applyDefaultHeaders(req, url, { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${acc.token}` });
+    const body = JSON.stringify({ items });
+    const res = await new Promise((resolve) => {
+      let data = '';
+      req.on('response', (r) => { r.on('data', (c)=> data += c); r.on('end', ()=> resolve({ status: r.statusCode || 0, body: data })); });
+      req.on('error', ()=> resolve({ status: 0, body: '' }));
+      req.write(body);
+      req.end();
+    });
+    if (res.status >= 400) return { ok: false, error: 'Server error' };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});

@@ -1,0 +1,18 @@
+{
+  "name": "streambooru-sync-server",
+  "private": true,
+  "version": "0.4.0",
+  "main": "src/index.js",
+  "license": "GPL-3.0",
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node src/migrate.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "jsonwebtoken": "^9.0.2",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.13.1"
+  }
+}
