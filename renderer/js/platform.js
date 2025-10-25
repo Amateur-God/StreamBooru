@@ -2,13 +2,11 @@
    - Supplies window.api on Android/Web:
      * load/save config (localStorage)
      * fetchBooru (Danbooru, Yande.re/Moebooru, Gelbooru)
-         - Danbooru uses browser fetch; falls back to native HTTP when needed
-         - Gelbooru supports optional credentials (user_id, api_key) and XML fallback if JSON is blocked
      * local favorites
      * proxyImage(url) -> data URL (native HTTP) for hotlink-protected images
+     * Account + Sync (mobile): serverBase/token/user management and basic sync helpers
    - Honors Site Manager rating dropdown (safe | questionable | explicit | any)
 */
-
 (function () {
   // ---------- environment ----------
   const isElectron = () => navigator.userAgent.includes('Electron');
@@ -27,16 +25,12 @@
     try { return new URL(url).origin; } catch { return ''; }
   }
 
-  async function httpGetJSON(url) {
+  async function httpGetJSON(url, headers = {}) {
     const Http = getHttp();
     if (isAndroid() && Http && typeof Http.get === 'function') {
       const res = await Http.get({
         url,
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': UA,
-          'Referer': originFrom(url)
-        },
+        headers: { Accept: 'application/json', 'User-Agent': UA, Referer: originFrom(url), ...headers },
         readTimeout: 15000,
         connectTimeout: 15000
       });
@@ -46,21 +40,18 @@
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch {} }
       return data;
     }
-    const r = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': UA } });
+    const r = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': UA, ...headers } });
     if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
     return r.json();
   }
 
-  async function httpGetText(url) {
+  async function httpGetText(url, headers = {}) {
     const Http = getHttp();
     if (isAndroid() && Http && typeof Http.get === 'function') {
       const res = await Http.get({
         url,
         responseType: 'text',
-        headers: {
-          'User-Agent': UA,
-          'Referer': originFrom(url)
-        },
+        headers: { 'User-Agent': UA, Referer: originFrom(url), ...headers },
         readTimeout: 20000,
         connectTimeout: 15000
       });
@@ -68,9 +59,57 @@
       if (status < 200 || status >= 300) throw new Error(`HTTP ${status} for ${url}`);
       return String(res.data ?? '');
     }
-    const r = await fetch(url, { headers: { 'User-Agent': UA } });
+    const r = await fetch(url, { headers: { 'User-Agent': UA, ...headers } });
     if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
     return r.text();
+  }
+
+  async function httpPostJSON(url, body = {}, headers = {}) {
+    const Http = getHttp();
+    if (isAndroid() && Http && typeof Http.post === 'function') {
+      const res = await Http.post({
+        url,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': UA, Referer: originFrom(url), ...headers },
+        data: body,
+        readTimeout: 20000,
+        connectTimeout: 15000
+      });
+      const status = res.status ?? 0;
+      let data = res.data;
+      if (typeof data === 'string') { try { data = JSON.parse(data); } catch {} }
+      return { status, json: data };
+    }
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': UA, ...headers },
+      body: JSON.stringify(body || {})
+    });
+    let json = null; try { json = await resp.json(); } catch {}
+    return { status: resp.status || 0, json };
+  }
+
+  async function httpPutJSON(url, body = {}, headers = {}) {
+    const Http = getHttp();
+    if (isAndroid() && Http && typeof Http.put === 'function') {
+      const res = await Http.put({
+        url,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': UA, Referer: originFrom(url), ...headers },
+        data: body,
+        readTimeout: 20000,
+        connectTimeout: 15000
+      });
+      const status = res.status ?? 0;
+      let data = res.data;
+      if (typeof data === 'string') { try { data = JSON.parse(data); } catch {} }
+      return { status, json: data };
+    }
+    const resp = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': UA, ...headers },
+      body: JSON.stringify(body || {})
+    });
+    let json = null; try { json = await resp.json(); } catch {}
+    return { status: resp.status || 0, json };
   }
 
   async function httpGetBase64(url) {
@@ -79,7 +118,7 @@
       const res = await Http.get({
         url,
         responseType: 'arraybuffer', // Capacitor returns base64 in res.data
-        headers: { 'User-Agent': UA, 'Referer': originFrom(url) },
+        headers: { 'User-Agent': UA, Referer: originFrom(url) },
         readTimeout: 20000,
         connectTimeout: 15000
       });
@@ -120,7 +159,6 @@
       const raw = localStorage.getItem(CFG_KEY);
       if (!raw) return defaultConfig();
       const parsed = JSON.parse(raw);
-      // ensure rating field exists
       if (parsed && Array.isArray(parsed.sites)) {
         parsed.sites = parsed.sites.map((s) => ({ rating: 'safe', tags: '', ...s }));
         return parsed;
@@ -157,6 +195,22 @@
   }
   async function favClear() { favSaveKeys(new Set()); favSaveMap(new Map()); return { ok: true }; }
 
+  // ---------- account for Android/Web ----------
+  const ACC_KEY = 'sb_account_v1';
+  function accLoad() {
+    try { return JSON.parse(localStorage.getItem(ACC_KEY) || '{}'); } catch { return {}; }
+  }
+  function accSave(obj) { try { localStorage.setItem(ACC_KEY, JSON.stringify(obj || {})); } catch {} }
+  function accGetBase(acc) {
+    const b = String(acc?.serverBase || '').trim();
+    if (!b) return '';
+    try { const u = new URL(b); return u.toString().replace(/\/+$/,''); } catch { return b.replace(/\/+$/,''); }
+  }
+  async function getMe(base, token) {
+    try { return await httpGetJSON(`${base}/api/me`, { Authorization: `Bearer ${token}` }); }
+    catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  }
+
   // ---------- normalization + rating helpers ----------
   function ensureHttps(url) {
     try {
@@ -176,12 +230,10 @@
       return isNaN(d.getTime()) ? '' : d.toISOString();
     } catch { return ''; }
   }
-
   function hasRatingSpecifier(tags) {
     return /\brating\s*:(?:safe|questionable|explicit|any|[sqe])\b/i.test(String(tags || ''));
   }
   function addRatingToken(tags, ratingVal) {
-    // ratingVal: 'safe' | 'questionable' | 'explicit'
     const token = ratingVal === 'questionable' ? 'rating:questionable'
                 : ratingVal === 'explicit'     ? 'rating:explicit'
                 :                                 'rating:safe';
@@ -189,10 +241,10 @@
   }
   function canonRating(r) {
     const t = String(r || '').toLowerCase();
-    if (t === 'g' || t === 'general') return 's'; // treat general as safe
-    if (t.startsWith('s')) return 's';            // s / safe
+    if (t === 'g' || t === 'general') return 's';
+    if (t.startsWith('s')) return 's';
     if (t.startsWith('q') || t === 'sensitive' || t === 'mature') return 'q';
-    if (t.startsWith('e')) return 'e';            // e / explicit
+    if (t.startsWith('e')) return 'e';
     return '';
   }
 
@@ -255,26 +307,19 @@
     };
   }
 
-  // ---------- per-site fetchers (with credentials + fallbacks) ----------
+  // ---------- per-site fetchers ----------
   function cred(site, key) {
-    // Accept both site.credentials.key and legacy site.key
     return (site?.credentials && site.credentials[key]) || site?.[key] || '';
   }
   function withDanbooruAuth(params, site) {
     const login = cred(site, 'login');
     const apiKey = cred(site, 'api_key');
-    if (login && apiKey) {
-      params.set('login', login);
-      params.set('api_key', apiKey);
-    }
+    if (login && apiKey) { params.set('login', login); params.set('api_key', apiKey); }
   }
   function withGelbooruAuth(params, site) {
     const userId = cred(site, 'user_id');
     const apiKey = cred(site, 'api_key');
-    if (userId && apiKey) {
-      params.set('user_id', userId);
-      params.set('api_key', apiKey);
-    }
+    if (userId && apiKey) { params.set('user_id', userId); params.set('api_key', apiKey); }
   }
 
   async function fetchDanbooru({ baseUrl, tags, page, limit, site }) {
@@ -284,9 +329,8 @@
     if (page) params.set('page', String(page));
     withDanbooruAuth(params, site);
     const url = `${baseUrl.replace(/\/+$/,'')}/posts.json?${params.toString()}`;
-
     try {
-      const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
       const json = await r.json();
       return Array.isArray(json) ? json : [];
@@ -295,7 +339,6 @@
       return Array.isArray(json) ? json : [];
     }
   }
-
   async function fetchMoebooru({ baseUrl, tags, page, limit }) {
     const params = new URLSearchParams();
     if (limit) params.set('limit', String(limit));
@@ -305,7 +348,6 @@
     const json = await httpGetJSON(url);
     return Array.isArray(json) ? json : [];
   }
-
   async function parseGelbooruXml(xmlText) {
     try {
       const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
@@ -321,25 +363,17 @@
         out.push(attrs);
       }
       return out;
-    } catch {
-      return [];
-    }
+    } catch { return []; }
   }
-
   async function fetchGelbooru({ baseUrl, tags, page, limit, site }) {
     const base = baseUrl.replace(/\/+$/,'');
     const params = new URLSearchParams();
-    params.set('page', 'dapi');
-    params.set('s', 'post');
-    params.set('q', 'index');
-    params.set('json', '1');
+    params.set('page', 'dapi'); params.set('s', 'post'); params.set('q', 'index'); params.set('json', '1');
     if (limit) params.set('limit', String(limit));
     if (tags) params.set('tags', tags);
-    if (page) params.set('pid', String((page - 1) || 0)); // 0-based
+    if (page) params.set('pid', String((page - 1) || 0));
     withGelbooruAuth(params, site);
-
     const jsonUrl = `${base}/index.php?${params.toString()}`;
-
     try {
       const json = await httpGetJSON(jsonUrl);
       return Array.isArray(json) ? json : (Array.isArray(json?.post) ? json.post : []);
@@ -349,13 +383,10 @@
         const xmlUrl = `${base}/index.php?${params.toString()}`;
         const xml = await httpGetText(xmlUrl);
         return await parseGelbooruXml(xml);
-      } catch (e2) {
-        throw e2;
-      }
+      } catch (e2) { throw e2; }
     }
   }
 
-  // Popular mapping
   function popularTagFor(siteType) {
     if (siteType === 'danbooru') return 'order:rank';
     if (siteType === 'moebooru') return 'order:score';
@@ -370,16 +401,13 @@
     const baseUrl = site.baseUrl;
     const page = typeof cursor === 'number' && cursor > 0 ? cursor : 1;
 
-    // Build tag string based on incoming search; Site Manager already strips rating tokens from its "tags" field.
     let tags = (search || '').trim();
     if (viewType === 'popular') {
       const pop = popularTagFor(site.type);
       tags = tags ? `${pop} ${tags}` : pop;
     }
-
-    // If user didn't specify rating in the search, apply site.rating unless "any"
-    const ratingPref = String(site.rating || '').toLowerCase(); // 'safe' | 'questionable' | 'explicit' | 'any' | ''
-    let injectedRating = ''; // 's' | 'q' | 'e' when we inject, else ''
+    const ratingPref = String(site.rating || '').toLowerCase();
+    let injectedRating = '';
     if (!hasRatingSpecifier(tags) && ratingPref && ratingPref !== 'any') {
       tags = addRatingToken(tags, ratingPref);
       injectedRating = ratingPref.startsWith('q') ? 'q' : ratingPref.startsWith('e') ? 'e' : 's';
@@ -401,13 +429,9 @@
       } else if (site.type === 'gelbooru') {
         raw = await fetchGelbooru({ baseUrl, tags, page, limit, site });
       } else {
-        // Fallback to Danbooru API contract if unknown type
         raw = await fetchDanbooru({ baseUrl, tags, page, limit: Math.min(30, limit), site });
       }
-    } catch (e) {
-      console.error('fetchBooru error', site, e);
-      raw = [];
-    }
+    } catch { raw = []; }
 
     let norm = (raw || []).map((p) => {
       try {
@@ -418,16 +442,13 @@
       } catch { return null; }
     }).filter(Boolean);
 
-    // If we injected a rating based on the site's dropdown, also hard-filter client-side to be safe.
-    if (injectedRating) {
-      norm = norm.filter((p) => canonRating(p.rating) === injectedRating);
-    }
+    if (injectedRating) norm = norm.filter((p) => canonRating(p.rating) === injectedRating);
 
     const nextCursor = norm.length >= Math.max(1, limit) ? page + 1 : null;
     return { posts: norm, nextCursor };
   }
 
-  // ---------- proxy image (anti-hotlink) ----------
+  // ---------- proxy image ----------
   async function proxyImage(url) {
     try {
       const base64 = await httpGetBase64(url);
@@ -475,17 +496,9 @@
     if (C && C.Plugins && C.Plugins.App && typeof C.Plugins.App.getInfo === 'function') { try { const info = await C.Plugins.App.getInfo(); return info?.version || 'android'; } catch {} }
     return 'web';
   }
-  async function ensureStoragePermission() {
-    if (!isAndroid() || !C || !C.Plugins || !C.Plugins.Filesystem) return true;
-    if (typeof C.Plugins.Filesystem.requestPermissions === 'function') {
-      try { const perm = await C.Plugins.Filesystem.requestPermissions(); return perm.publicStorage === 'granted' || perm.publicStorage === 'limited'; }
-      catch { return true; }
-    }
-    return true;
-  }
 
   // ---------- expose ----------
-  window.Platform = { isElectron, isAndroid, openExternal, share, saveImageFromUrl, getVersion, ensureStoragePermission };
+  window.Platform = { isElectron, isAndroid, openExternal, share, saveImageFromUrl, getVersion };
 
   // Provide Electron-like window.api in Android/Web builds
   if (!isElectron()) {
@@ -493,19 +506,24 @@
       // Config
       loadConfig: loadConfigWeb,
       saveConfig: saveConfigWeb,
+
       // Fetch
       fetchBooru: fetchBooruWeb,
+
       // External/open
       openExternal,
+
       // Images
       downloadImage: async ({ url, fileName }) => saveImageFromUrl(url, fileName),
       downloadBulk: undefined, // not supported on Android
       proxyImage,
+
       // Site APIs (not available on Android)
       booruFavorite: async () => ({ ok: false, error: 'Not supported on Android build' }),
       authCheck: async () => ({ ok: true }),
       rateLimit: async () => ({ ok: true }),
       rateLimitCheck: async () => ({ ok: true }),
+
       // Local favorites
       favKeys,
       favList,
@@ -515,8 +533,119 @@
       getLocalFavorites: favList,
       toggleLocalFavorite: favToggle,
       clearLocalFavorites: favClear,
-      // Version
-      getVersion
+
+      // Account + sync (Android/Web)
+      accountGet: async () => {
+        const acc = accLoad();
+        return {
+          serverBase: acc.serverBase || '',
+          token: acc.token || '',
+          user: acc.user || null,
+          loggedIn: !!acc.token
+        };
+      },
+      accountSetServer: async (base) => {
+        const acc = accLoad();
+        const val = String(base || '').trim();
+        acc.serverBase = val;
+        accSave(acc);
+        return { ok: true, serverBase: acc.serverBase || '' };
+      },
+      accountRegister: async (username, password) => {
+        const acc = accLoad();
+        const base = accGetBase(acc);
+        if (!base) return { ok: false, error: 'No server selected' };
+        const { status, json } = await httpPostJSON(`${base}/auth/local/register`, { username, password });
+        if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Register failed' };
+        acc.token = json.token;
+        try {
+          const me = await getMe(base, acc.token);
+          if (me?.ok && me.user) acc.user = me.user;
+        } catch {}
+        accSave(acc);
+        return { ok: true, user: acc.user || null };
+      },
+      accountLoginLocal: async (username, password) => {
+        const acc = accLoad();
+        const base = accGetBase(acc);
+        if (!base) return { ok: false, error: 'No server selected' };
+        const { status, json } = await httpPostJSON(`${base}/auth/local/login`, { username, password });
+        if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Login failed' };
+        acc.token = json.token;
+        try {
+          const me = await getMe(base, acc.token);
+          if (me?.ok && me.user) acc.user = me.user;
+        } catch {}
+        accSave(acc);
+        return { ok: true, user: acc.user || null };
+      },
+      accountLoginDiscord: async () => {
+        const acc = accLoad();
+        const base = accGetBase(acc);
+        if (!base) return { ok: false, error: 'No server selected' };
+        // Open OAuth in browser; fallback page will show a token the user can copy (manual step for now)
+        await openExternal(`${base}/auth/discord`);
+        return { ok: false, error: 'Discord login opens in your browser on Android. Copy the token and paste into the app (support for deep-link callback coming soon).' };
+      },
+      accountLinkDiscord: async () => {
+        const acc = accLoad();
+        const base = accGetBase(acc);
+        if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
+        // Start link in browser; after user completes, they can return and we fetch /api/me on next open
+        try {
+          const start = await httpGetJSON(`${base}/api/link/discord/start`, { Authorization: `Bearer ${acc.token}` });
+          if (start?.ok && start.url) {
+            await openExternal(start.url);
+            return { ok: true, linked: false, note: 'Complete linking in the browser, then reopen the app to refresh status.' };
+          }
+          return { ok: false, error: 'Server refused link start' };
+        } catch (e) {
+          return { ok: false, error: String(e?.message || e) };
+        }
+      },
+      accountLogout: async () => {
+        const acc = accLoad();
+        accSave({ serverBase: acc.serverBase || '', token: '', user: null });
+        return { ok: true };
+      },
+
+      // Sync hooks (lightweight for Android)
+      sync:onLogin, // alias below
+      syncOnLogin: async () => ({ ok: true }),
+      syncPullFavorites: async () => {
+        try {
+          const acc = accLoad();
+          const base = accGetBase(acc);
+          if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
+          const data = await httpGetJSON(`${base}/api/favorites`, { Authorization: `Bearer ${acc.token}` });
+          const remote = Array.isArray(data?.items) ? data.items : [];
+          const keys = favLoadKeys(); const map = favLoadMap();
+          for (const it of remote) {
+            const k = String(it.key || ''); if (!k || keys.has(k) || !it.post) continue;
+            keys.add(k); map.set(k, JSON.stringify({ ...it.post, _added_at: Number(it.added_at) || Date.now() }));
+          }
+          favSaveKeys(keys); favSaveMap(map);
+          return { ok: true, merged: remote.length };
+        } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+      },
+      sitesGetRemote: async () => {
+        try {
+          const acc = accLoad();
+          const base = accGetBase(acc);
+          if (!base || !acc.token) return { ok: true, sites: [] };
+          const j = await httpGetJSON(`${base}/api/sites`, { Authorization: `Bearer ${acc.token}` });
+          return { ok: true, sites: Array.isArray(j?.sites) ? j.sites : [] };
+        } catch { return { ok: true, sites: [] }; }
+      },
+      sitesSaveRemote: async (sites) => {
+        try {
+          const acc = accLoad();
+          const base = accGetBase(acc);
+          if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
+          const res = await httpPutJSON(`${base}/api/sites`, { sites: Array.isArray(sites) ? sites : [] }, { Authorization: `Bearer ${acc.token}` });
+          return { ok: res.status && res.status < 400 };
+        } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+      }
     };
   }
 })();
