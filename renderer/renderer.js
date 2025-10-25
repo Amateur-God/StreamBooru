@@ -86,7 +86,6 @@ function computePopularity(items) {
     const sk = siteKey(p.site || {});
     const st = stats.get(sk) || { favP95: 0, scoreP95: 0 };
     const favNorm = st.favP95>0 ? clamp01(safeNum(p.favorites,0)/st.favP95) : 0;
-    // FIX: correct property and guard
     const scoreNorm = st.scoreP95>0 ? clamp01(safeNum(p.score,0)/st.scoreP95) : 0;
     const pop = 1.0*favNorm + 0.6*scoreNorm + 0.15*recencyBoost(p, now);
     map.set(itemKey(p), Number.isFinite(pop) ? pop : 0);
@@ -392,11 +391,9 @@ function openDownloadOptionsPopover(anchorEl) {
   const pop = document.getElementById('download-options');
   if (!pop) return;
 
-  // Position near the anchor (button)
   const rect = anchorEl.getBoundingClientRect();
   const margin = 8;
   pop.classList.remove('hidden');
-  // Temporarily display to measure width/height
   pop.style.visibility = 'hidden';
   pop.style.left = '0px'; pop.style.top = '0px';
   const pw = pop.offsetWidth || 360;
@@ -408,7 +405,6 @@ function openDownloadOptionsPopover(anchorEl) {
   pop.style.left = `${Math.round(left)}px`;
   pop.style.top = `${Math.round(top)}px`;
 
-  // Close handlers
   const close = () => { pop.classList.add('hidden'); document.removeEventListener('mousedown', outside); window.removeEventListener('keydown', esc); };
   const outside = (e) => { if (!pop.contains(e.target) && e.target !== anchorEl) close(); };
   const esc = (e) => { if (e.key === 'Escape') close(); };
@@ -416,16 +412,13 @@ function openDownloadOptionsPopover(anchorEl) {
   window.addEventListener('keydown', esc);
 
   const btnClose = document.getElementById('dlopt-close');
-  if (btnClose) {
-    btnClose.onclick = close;
-  }
+  if (btnClose) { btnClose.onclick = close; }
 }
 
 function setupDownloadAll() {
   const btn = document.getElementById('btn-download-all');
   const sel = document.getElementById('name-template');
 
-  // Load saved template; migrate old comma-based preset to hyphen preset
   let saved = localStorage.getItem('sb_name_tpl') || '{site}-{id}';
   const oldCommaPreset = '{site},{score},{artist},{copyright},{character},{id}';
   const newHyphenPreset = '{site}-{score}-{artist}-{copyright}-{character}-{id}';
@@ -435,7 +428,6 @@ function setupDownloadAll() {
   }
   state.nameTemplate = saved;
 
-  // Initialize selector to saved value (if preset exists) or Custom…
   if (sel) {
     let matched = false;
     for (const opt of Array.from(sel.options)) {
@@ -461,20 +453,11 @@ function setupDownloadAll() {
   }
 
   if (btn) {
-    // Left-click: download; Shift/Alt-click: open options
     btn.addEventListener('click', (e) => {
-      if (e.shiftKey || e.altKey) {
-        e.preventDefault();
-        openDownloadOptionsPopover(btn);
-      } else {
-        onDownloadAllClick();
-      }
+      if (e.shiftKey || e.altKey) { e.preventDefault(); openDownloadOptionsPopover(btn); }
+      else onDownloadAllClick();
     });
-    // Right-click to open options
-    btn.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      openDownloadOptionsPopover(btn);
-    });
+    btn.addEventListener('contextmenu', (e) => { e.preventDefault(); openDownloadOptionsPopover(btn); });
   }
 }
 
@@ -524,6 +507,10 @@ function setupManageSites() {
         state.searchOrder = (state.config.sites || []).map((s)=> siteKey(s));
         clearFeed();
         await window.api.saveConfig(state.config);
+        try {
+          const acct = await window.api.accountGet?.();
+          if (acct?.loggedIn) await window.api.sitesSaveRemote(state.config.sites || []);
+        } catch {}
         fetchBatch();
       }, () => {});
     } catch (err) {
@@ -592,6 +579,15 @@ window.toggleLocalFavorite = async (post) => {
     return { ok: false, error: String(e?.message || e) };
   }
 };
+
+// ---------- respond to config changes ----------
+(function subscribeConfigEvents() {
+  window.events?.onConfigChanged?.(async (cfg) => {
+    state.config = cfg || { sites: [] };
+    state.searchOrder = (state.config.sites || []).map((s)=> siteKey(s));
+    clearFeed(); fetchBatch();
+  });
+})();
 
 // ---------- bootstrap ----------
 async function init() {
