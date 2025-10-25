@@ -43,7 +43,7 @@ app.use((req, res, next) => {
   req.on('error', () => next());
 });
 
-/* req log */
+/* log */
 app.use((req, _res, next) => { try { console.log(`${req.method} ${req.url}`); } catch {} next(); });
 
 /* config */
@@ -94,8 +94,7 @@ function extractCreds(req) {
         if (idx >= 0) {
           const u2 = raw.slice(0, idx);
           const p2 = raw.slice(idx + 1);
-          if (!u) u = u2;
-          if (!p) p = p2;
+          if (!u) u = u2; if (!p) p = p2;
         }
       } catch {}
     }
@@ -103,72 +102,52 @@ function extractCreds(req) {
   return { username: String(u || '').trim(), password: String(p || '') };
 }
 
-/* password enc helpers (encrypt at rest) */
+/* legacy password helpers */
 function looksBcrypt(s) { return typeof s === 'string' && /^\$2[aby]\$[0-9]{2}\$/.test(s); }
-function tryDec(value) {
-  try { return dec(value); } catch { return null; }
-}
+function tryDec(value) { try { return dec(value); } catch { return null; } }
 function unwrapHashFromDec(d) {
   if (!d) return null;
   if (typeof d === 'string') return d;
   if (typeof d === 'object' && typeof d.hash === 'string') return d.hash;
   return null;
 }
-function encHash(hash) {
-  // store as encrypted object; column is TEXT so we keep JSON string inside TEXT
-  return enc({ hash: String(hash || '') });
-}
-async function verifyAndMaybeUpgradePassword(userId, submittedPassword, storedValue) {
-  // 1) decrypt attempt
+async function verifyAndMaybeMigrateToRaw(userId, submittedPassword, storedValue) {
   const decd = tryDec(storedValue);
   const decHash = unwrapHashFromDec(decd);
 
-  // 1a) decrypted -> bcrypt
   if (looksBcrypt(decHash)) {
     const ok = await bcrypt.compare(submittedPassword, decHash);
-    if (ok) return { ok: true, newStored: null }; // already encrypted bcrypt
-    return { ok: false, newStored: null };
+    if (ok) {
+      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [decHash, userId]); } catch {}
+    }
+    return ok;
   }
-  // 1b) decrypted -> plaintext (very legacy)
   if (typeof decHash === 'string' && decHash) {
     if (decd === submittedPassword || decHash === submittedPassword) {
       const newHash = await bcrypt.hash(submittedPassword, 12);
-      const newStored = encHash(newHash);
-      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newStored, userId]); } catch {}
-      return { ok: true, newStored };
+      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]); } catch {}
+      return true;
     }
   }
-
-  // 2) fallback: raw is bcrypt (legacy not encrypted)
   if (looksBcrypt(storedValue)) {
-    const ok = await bcrypt.compare(submittedPassword, storedValue);
-    if (ok) {
-      const newStored = encHash(storedValue);
-      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newStored, userId]); } catch {}
-      return { ok: true, newStored };
-    }
-    return { ok: false, newStored: null };
+    return await bcrypt.compare(submittedPassword, storedValue);
   }
-
-  // 3) fallback: raw plaintext (ultra-legacy)
   if (typeof storedValue === 'string' && storedValue) {
     if (storedValue === submittedPassword) {
       const newHash = await bcrypt.hash(submittedPassword, 12);
-      const newStored = encHash(newHash);
-      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newStored, userId]); } catch {}
-      return { ok: true, newStored };
+      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]); } catch {}
+      return true;
     }
   }
-
-  return { ok: false, newStored: null };
+  return false;
 }
 
-/* per-user bus (SSE) */
+/* per-user bus */
 const userBus = new Map();
 function chanFor(uid) { if (!userBus.has(uid)) userBus.set(uid, new EventEmitter()); return userBus.get(uid); }
 function emitTo(uid, event, payload) { try { chanFor(uid).emit('event', { event, payload, ts: Date.now() }); } catch {} }
 
-/* migrations (idempotent) */
+/* migrations */
 async function runMigrations() {
   const steps = [
     `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS password_hash TEXT`,
@@ -204,10 +183,9 @@ app.post('/auth/local/register', async (req, res) => {
 
     const id = 'local:' + cryptoRandomId();
     const hash = await bcrypt.hash(password, 12);
-    const stored = encHash(hash);
     const created_at = Date.now();
     await query(`INSERT INTO users (id, username, avatar, created_at, password_hash) VALUES ($1, $2, '', $3, $4)`,
-      [id, username, created_at, stored]);
+      [id, username, created_at, hash]);
 
     const token = signToken({ id, username, avatar: '' });
     res.json({ ok: true, token });
@@ -235,7 +213,7 @@ app.post('/auth/local/login', async (req, res) => {
     const stored = row.password_hash;
     if (!stored) return res.status(409).json({ ok: false, error: 'no password set' });
 
-    const { ok } = await verifyAndMaybeUpgradePassword(row.id, password, stored);
+    const ok = await verifyAndMaybeMigrateToRaw(row.id, password, stored);
     if (!ok) return res.status(401).json({ ok: false, error: 'invalid credentials' });
 
     const token = signToken({ id: row.id, username: row.username, avatar: row.avatar || '' });
@@ -252,8 +230,7 @@ app.post('/auth/local/set_password', auth, async (req, res) => {
     const password = String(b.password || req.query?.password || req.headers['x-password'] || '');
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'bad password' });
     const hash = await bcrypt.hash(password, 12);
-    const stored = encHash(hash);
-    await query('UPDATE users SET password_hash = $1 WHERE id = $2', [stored, req.user.id]);
+    await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
     res.json({ ok: true });
   } catch (e) {
     console.error('Set password error:', e?.message || e);
