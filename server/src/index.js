@@ -381,12 +381,72 @@ app.post('/api/favourites/bulk_upsert', auth, async (req, res) => {
   }
 });
 
-/* ---------- aliases: American spelling (legacy) ---------- */
-app.get('/api/favorites', (req, res) => res.redirect(307, '/api/favourites'));
-app.get('/api/favorites/keys', (req, res) => res.redirect(307, '/api/favourites/keys'));
-app.post('/api/favorites/bulk_upsert', (req, res) => res.redirect(307, '/api/favourites/bulk_upsert'));
-app.put('/api/favorites/:key', (req, res) => res.redirect(307, `/api/favourites/${encodeURIComponent(req.params.key)}`));
-app.delete('/api/favorites/:key', (req, res) => res.redirect(307, `/api/favourites/${encodeURIComponent(req.params.key)}`));
+/* ---------- favorites (US spelling direct handlers) ---------- */
+app.get('/api/favorites/keys', auth, async (req, res) => {
+  const r = await query('SELECT key FROM favorites WHERE user_id = $1 ORDER BY added_at DESC', [req.user.id]);
+  res.json({ ok: true, keys: r.rows.map(x => x.key) });
+});
+app.get('/api/favorites', auth, async (req, res) => {
+  const r = await query('SELECT key, added_at, post_json FROM favorites WHERE user_id = $1 ORDER BY added_at DESC', [req.user.id]);
+  const items = r.rows.map(row => ({ key: row.key, added_at: Number(row.added_at) || 0, post: row.post_json })).filter(x => x.post);
+  res.json({ ok: true, items });
+});
+app.put('/api/favorites/:key', auth, async (req, res) => {
+  try {
+    const key = sanitizeFavoriteKey(req.params.key);
+    const post = clampPost(bodyObj(req)?.post);
+    if (!key || !post) return res.status(400).json({ ok: false, error: 'bad key/post' });
+    const added_at = Number(bodyObj(req)?.added_at) || Date.now();
+    await query(`
+      INSERT INTO favorites (user_id, key, added_at, post_json)
+      VALUES ($1, $2, $3, $4::jsonb)
+      ON CONFLICT(user_id, key) DO UPDATE SET added_at = EXCLUDED.added_at, post_json = EXCLUDED.post_json
+    `, [req.user.id, key, added_at, post]);
+    emitTo(req.user.id, 'fav_changed', { key, added_at });
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ ok: false });
+  }
+});
+app.delete('/api/favorites/:key', auth, async (req, res) => {
+  try {
+    const key = sanitizeFavoriteKey(req.params.key);
+    if (!key) return res.status(400).json({ ok: false, error: 'bad key' });
+    await query('DELETE FROM favorites WHERE user_id = $1 AND key = $2', [req.user.id, key]);
+    emitTo(req.user.id, 'fav_changed', { key, removed: true });
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ ok: false });
+  }
+});
+app.post('/api/favorites/bulk_upsert', auth, async (req, res) => {
+  try {
+    const b = bodyObj(req);
+    const items = Array.isArray(b.items) ? b.items : [];
+    const now = Date.now();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const it of items) {
+        const key = sanitizeFavoriteKey(it?.key);
+        const post = clampPost(it?.post);
+        if (!key || !post) continue;
+        const added_at = Number(it?.added_at) || now;
+        await client.query(`
+          INSERT INTO favorites (user_id, key, added_at, post_json)
+          VALUES ($1, $2, $3, $4::jsonb)
+          ON CONFLICT(user_id, key) DO UPDATE SET added_at = EXCLUDED.added_at, post_json = EXCLUDED.post_json
+        `, [req.user.id, key, added_at, post]);
+      }
+      await client.query('COMMIT');
+    } catch (e) { try { await client.query('ROLLBACK'); } catch {} throw e; }
+    finally { client.release(); }
+    emitTo(req.user.id, 'fav_changed', { bulk: true, count: items.length, at: Date.now() });
+    res.json({ ok: true, upserted: items.length });
+  } catch {
+    res.status(500).json({ ok: false });
+  }
+});
 
 /* ---------- sites ---------- */
 app.get('/api/sites', auth, async (req, res) => {

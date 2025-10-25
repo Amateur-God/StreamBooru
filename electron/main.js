@@ -6,6 +6,9 @@ const http = require('http');
 /* dev */
 const isDev = process.env.SB_DEV === '1';
 
+/* constants */
+const DEFAULT_SERVER = 'https://streambooru.ecchibooru.uk';
+
 /* adapters loader */
 function loadAdapter(name) {
   const dev = path.join(__dirname, '..', 'src', 'adapters', name);
@@ -78,11 +81,27 @@ function createWindow() {
   win.setMenuBarVisibility(false);
   setupHotlinkHeaders(win.webContents.session);
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+  // Open DevTools automatically in dev
+  if (isDev) {
+    try { win.webContents.openDevTools({ mode: 'detach' }); } catch {}
+  }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   createWindow();
+
+  // If already logged in, start SSE and refresh favourites once
+  try {
+    const acc = readAccount();
+    if (acc?.token) {
+      openEventStream();
+      console.log('[SSE] startup: pulling favourites once…');
+      await pullFavoritesMerge().catch(()=>{});
+    }
+  } catch {}
+
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
@@ -240,7 +259,7 @@ function httpDelete(url, headers = {}) {
 const adapters = {
   danbooru: new Danbooru(httpGetJson, httpPostForm, httpDelete),
   moebooru: new Moebooru(httpGetJson, httpPostForm),
-  gelbooru: new Gelbooru(httpGetJson, (u,h)=>new Promise((resolve,reject)=>{const r=net.request({url:u,method:'GET'});applyDefaultHeaders(r,u,h||{});let d='';r.on('response',(res)=>{res.on('data',(c)=>d+=c);res.on('end',()=>resolve(d));});r.on('error',reject);r.end();})),
+  gelbooru: new Gelbooru(httpGetJson, (u,h)=>new Promise((resolve,reject)=>{const r=net.request({url:u,method:'GET'});applyDefaultHeaders(r,u,h||{});let d='';r.on('response',(res)=>{res.on('data',(c)=>d+=c);res.on('end',()=>{try{resolve(JSON.parse(d))}catch{resolve([])}})});r.on('error',reject);r.end();})),
   e621: new E621(httpGetJson),
   derpibooru: new Derpibooru(httpGetJson)
 };
@@ -248,30 +267,45 @@ const adapters = {
 /* account store */
 function readAccount() {
   if (!fs.existsSync(ACCOUNT_PATH)) {
-    const def = { serverBase: 'https://streambooru.co.uk', token: '', user: null };
+    const def = { serverBase: DEFAULT_SERVER, token: '', user: null };
     fs.writeFileSync(ACCOUNT_PATH, JSON.stringify(def, null, 2), 'utf-8');
     return def;
   }
-  try { return JSON.parse(fs.readFileSync(ACCOUNT_PATH, 'utf-8')); } catch { return { serverBase: 'https://streambooru.co.uk', token: '', user: null }; }
+  try { return JSON.parse(fs.readFileSync(ACCOUNT_PATH, 'utf-8')); } catch { return { serverBase: DEFAULT_SERVER, token: '', user: null }; }
 }
 function writeAccount(acc) {
-  const base = acc?.serverBase || 'https://streambooru.co.uk';
+  const base = acc?.serverBase || DEFAULT_SERVER;
   fs.writeFileSync(ACCOUNT_PATH, JSON.stringify({ serverBase: base, token: acc?.token || '', user: acc?.user || null }, null, 2), 'utf-8');
+  try { win?.webContents?.send?.('account:changed'); } catch {}
 }
 
 /* SSE (optional sync) */
 let esReq = null;
 function closeEventStream() { try { esReq?.abort?.(); } catch {} esReq = null; }
+
+function scheduleReconnect(oldReq) {
+  setTimeout(() => {
+    if (esReq === oldReq) {
+      console.log('[SSE] reconnecting…');
+      openEventStream();
+    }
+  }, 3000);
+}
+
 async function openEventStream() {
   closeEventStream();
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return;
   const url = `${acc.serverBase.replace(/\/+$/,'')}/api/stream`;
+  console.log('[SSE] connecting', url);
   const req = net.request({ url, method: 'GET' });
   esReq = req;
   applyDefaultHeaders(req, url, { Accept: 'text/event-stream', Authorization: `Bearer ${acc.token}` });
   let buf = '';
   req.on('response', (res) => {
+    console.log('[SSE] connected (status', res.statusCode, ')');
+    res.on('end', () => { console.log('[SSE] ended'); scheduleReconnect(req); });
+    res.on('aborted', () => { console.log('[SSE] aborted'); scheduleReconnect(req); });
     res.on('data', async (chunk) => {
       buf += chunk.toString('utf8');
       const parts = buf.split(/\n\n/);
@@ -283,6 +317,8 @@ async function openEventStream() {
           if (ln.startsWith('event:')) ev = ln.slice(6).trim();
           else if (ln.startsWith('data:')) data += ln.slice(5).trim();
         }
+        if (ev === 'ping' || ev === 'hello') continue;
+        console.log('[SSE] event', ev);
         if (ev === 'fav_changed') {
           try {
             let payload = null;
@@ -290,7 +326,7 @@ async function openEventStream() {
             if (payload && payload.removed && payload.key) {
               removeLocalFavoriteKey(String(payload.key));
             } else {
-              await pullFavoritesMerge();
+              await pullFavoritesMerge().catch(()=>{});
             }
           } catch {}
         }
@@ -300,7 +336,7 @@ async function openEventStream() {
       }
     });
   });
-  req.on('error', () => {});
+  req.on('error', (e) => { console.warn('[SSE] error', String(e)); scheduleReconnect(req); });
   req.end();
 }
 
@@ -308,21 +344,22 @@ async function openEventStream() {
 async function pushFavoriteRemote(key, post, added_at) {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return { ok: false, skipped: true };
-  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites/${encodeURIComponent(key)}`;
+  // Use canonical British spelling to avoid redirects
+  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favourites/${encodeURIComponent(key)}`;
   const res = await httpPutJson(url, { post, added_at: added_at || Date.now() }, { Authorization: `Bearer ${acc.token}` });
   return { ok: res.status && res.status < 400 };
 }
 async function deleteFavoriteRemote(key) {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return { ok: false, skipped: true };
-  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites/${encodeURIComponent(key)}`;
+  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favourites/${encodeURIComponent(key)}`;
   const res = await httpDelete(url, { Authorization: `Bearer ${acc.token}` });
   return { ok: res.status && res.status < 400 };
 }
 async function pullFavoritesMerge() {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return { ok: false, error: 'Not logged in' };
-  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites`;
+  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favourites`;
   const j = await httpGetJson(url, { Authorization: `Bearer ${acc.token}` });
   const remote = Array.isArray(j?.items) ? j.items : [];
 
@@ -339,7 +376,7 @@ async function pushAllFavorites() {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return { ok: false };
   const items = loadFavorites();
-  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites/bulk_upsert`;
+  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favourites/bulk_upsert`;
   const res = await httpPostJson(url, { items }, { Authorization: `Bearer ${acc.token}` });
   return { ok: res.status && res.status < 400 };
 }
@@ -358,8 +395,8 @@ async function sitesRemotePut(sites) {
   return { ok: res.status && res.status < 400 };
 }
 async function onLoginUnion() {
-  await pushAllFavorites();
-  await pullFavoritesMerge();
+  await pushAllFavorites().catch(()=>{});
+  await pullFavoritesMerge().catch(()=>{});
   const localCfg = readConfig();
   const localSites = Array.isArray(localCfg?.sites) ? localCfg.sites : [];
   const remoteSites = await sitesRemoteGet();
@@ -369,7 +406,7 @@ async function onLoginUnion() {
   for (const s of localSites) if (!map.has(key(s))) map.set(key(s), s);
   const union = Array.from(map.values()).map((s, idx)=>({ ...s, order_index: idx }));
   writeConfig({ sites: union });
-  await sitesRemotePut(union);
+  await sitesRemotePut(union).catch(()=>{});
   openEventStream();
 }
 
@@ -541,12 +578,15 @@ ipcMain.handle('favorites:clear', async () => { saveFavorites([]); return { ok: 
 /* IPC: account + sync */
 ipcMain.handle('account:get', async () => {
   const acc = readAccount();
-  return { serverBase: acc.serverBase || 'https://streambooru.co.uk', token: acc.token || '', user: acc.user || null, loggedIn: !!(acc.token) };
+  // Ensure SSE is open if we already have a token
+  if (acc?.token) openEventStream();
+  return { serverBase: acc.serverBase || DEFAULT_SERVER, token: acc.token || '', user: acc.user || null, loggedIn: !!(acc.token) };
 });
 ipcMain.handle('account:setServer', async (_evt, base) => {
   const acc = readAccount();
-  const val = String(base || '').trim() || 'https://streambooru.co.uk';
+  const val = String(base || '').trim() || DEFAULT_SERVER;
   acc.serverBase = val; writeAccount(acc);
+  if (acc.token) openEventStream();
   return { ok: true, serverBase: acc.serverBase };
 });
 ipcMain.handle('account:register', async (_evt, { username, password }) => {
@@ -664,7 +704,7 @@ ipcMain.handle('account:linkDiscord', async () => {
 ipcMain.handle('account:logout', async () => {
   closeEventStream();
   const acc = readAccount();
-  writeAccount({ serverBase: acc.serverBase || 'https://streambooru.co.uk', token: '', user: null });
+  writeAccount({ serverBase: acc.serverBase || DEFAULT_SERVER, token: '', user: null });
   return { ok: true };
 });
 

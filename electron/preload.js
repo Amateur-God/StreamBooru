@@ -66,5 +66,11 @@ contextBridge.exposeInMainWorld('events', {
     const listener = () => handler();
     ipcRenderer.on('favorites:changed', listener);
     return () => ipcRenderer.removeListener('favorites:changed', listener);
+  },
+  onAccountChanged: (handler) => {
+    if (typeof handler !== 'function') return () => {};
+    const listener = () => handler();
+    ipcRenderer.on('account:changed', listener);
+    return () => ipcRenderer.removeListener('account:changed', listener);
   }
 });
