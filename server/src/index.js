@@ -16,37 +16,62 @@ const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitiz
 const app = express();
 app.set('trust proxy', true);
 
-/* body parser (tolerant) */
+/* unified body parser (1 MB limit, tolerant to mislabeled content-types) */
 app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD') { req.body = {}; return next(); }
+
   const max = 1024 * 1024;
-  let size = 0; const chunks = [];
+  let size = 0;
+  const chunks = [];
+
   req.on('data', (c) => {
     size += c.length;
-    if (size > max) { try { req.pause(); } catch {} res.status(413).send('Payload too large'); return; }
+    if (size > max) {
+      req.pause();
+      res.status(413).send('Payload too large');
+      return;
+    }
     chunks.push(c);
   });
+
   req.on('end', () => {
     const raw = Buffer.concat(chunks).toString('utf8');
     req.rawBody = raw;
     const ct = String(req.headers['content-type'] || '').toLowerCase();
     let obj = {};
-    const tryJson = () => { try { obj = JSON.parse(raw); } catch {} };
-    const tryForm = () => { try { obj = Object.fromEntries(new URLSearchParams(raw)); } catch {} };
+
+    const tryJson = () => {
+      try { obj = JSON.parse(raw); } catch { /* fallthrough */ }
+    };
+    const tryForm = () => {
+      try { obj = Object.fromEntries(new URLSearchParams(raw)); } catch { /* noop */ }
+    };
+
     if (!raw || !raw.trim()) { req.body = {}; return next(); }
-    if (ct.includes('application/json')) { tryJson(); if (!obj || typeof obj !== 'object' || Array.isArray(obj) || !Object.keys(obj).length) tryForm(); }
-    else if (ct.includes('application/x-www-form-urlencoded')) { tryForm(); if (!obj || typeof obj !== 'object' || Array.isArray(obj)) tryJson(); }
-    else { tryJson(); if (!obj || typeof obj !== 'object' || Array.isArray(obj) || !Object.keys(obj).length) tryForm(); }
+
+    if (ct.includes('application/json')) {
+      tryJson();
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm();
+    } else if (ct.includes('application/x-www-form-urlencoded')) {
+      tryForm();
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) tryJson();
+    } else {
+      tryJson();
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm();
+    }
+
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) obj = {};
-    req.body = obj; next();
+    req.body = obj;
+    next();
   });
+
   req.on('error', () => next());
 });
 
-/* log */
+/* request log (keep) */
 app.use((req, _res, next) => { try { console.log(`${req.method} ${req.url}`); } catch {} next(); });
 
-/* config */
+/* ---------- config ---------- */
 const PORT = Number(process.env.PORT || 3000);
 const HOST = String(process.env.HOST || '0.0.0.0');
 const STATIC_BASE_URL = String(process.env.BASE_URL || '').replace(/\/+$/, '');
@@ -55,7 +80,7 @@ const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 
-/* utils */
+/* ---------- utils ---------- */
 function publicBase(req) {
   if (STATIC_BASE_URL) return STATIC_BASE_URL;
   const host = String(req.headers['host'] || '').trim();
@@ -78,12 +103,19 @@ function auth(req, res, next) {
   }
 }
 function cryptoRandomId() { return crypto.randomBytes(16).toString('hex'); }
-function isAllowedDeepLink(url) { return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://'); }
-function bodyObj(req) { const b = req.body; return b && typeof b === 'object' && !Array.isArray(b) ? b : {}; }
+function isAllowedDeepLink(url) {
+  return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://');
+}
+
+/* helpers */
+function bodyObj(req) {
+  const b = req.body;
+  return b && typeof b === 'object' && !Array.isArray(b) ? b : {};
+}
 function extractCreds(req) {
   const b = bodyObj(req);
-  let u = (b.username ?? req.query?.username ?? req.headers['x-username'] ?? '').toString().trim();
-  let p = (b.password ?? req.query?.password ?? req.headers['x-password'] ?? '').toString();
+  let u = (b.username ?? req.query?.username ?? '').toString().trim();
+  let p = (b.password ?? req.query?.password ?? '').toString();
   if (!u || !p) {
     const h = String(req.headers.authorization || '');
     const m = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(h);
@@ -94,7 +126,8 @@ function extractCreds(req) {
         if (idx >= 0) {
           const u2 = raw.slice(0, idx);
           const p2 = raw.slice(idx + 1);
-          if (!u) u = u2; if (!p) p = p2;
+          if (!u) u = u2;
+          if (!p) p = p2;
         }
       } catch {}
     }
@@ -102,74 +135,40 @@ function extractCreds(req) {
   return { username: String(u || '').trim(), password: String(p || '') };
 }
 
-/* legacy password helpers */
-function looksBcrypt(s) { return typeof s === 'string' && /^\$2[aby]\$[0-9]{2}\$/.test(s); }
-function tryDec(value) { try { return dec(value); } catch { return null; } }
-function unwrapHashFromDec(d) {
-  if (!d) return null;
-  if (typeof d === 'string') return d;
-  if (typeof d === 'object' && typeof d.hash === 'string') return d.hash;
-  return null;
-}
-async function verifyAndMaybeMigrateToRaw(userId, submittedPassword, storedValue) {
-  const decd = tryDec(storedValue);
-  const decHash = unwrapHashFromDec(decd);
-
-  if (looksBcrypt(decHash)) {
-    const ok = await bcrypt.compare(submittedPassword, decHash);
-    if (ok) {
-      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [decHash, userId]); } catch {}
-    }
-    return ok;
-  }
-  if (typeof decHash === 'string' && decHash) {
-    if (decd === submittedPassword || decHash === submittedPassword) {
-      const newHash = await bcrypt.hash(submittedPassword, 12);
-      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]); } catch {}
-      return true;
-    }
-  }
-  if (looksBcrypt(storedValue)) {
-    return await bcrypt.compare(submittedPassword, storedValue);
-  }
-  if (typeof storedValue === 'string' && storedValue) {
-    if (storedValue === submittedPassword) {
-      const newHash = await bcrypt.hash(submittedPassword, 12);
-      try { await query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]); } catch {}
-      return true;
-    }
-  }
-  return false;
-}
-
-/* per-user bus */
+/* ---------- per-user bus (SSE) ---------- */
 const userBus = new Map();
 function chanFor(uid) { if (!userBus.has(uid)) userBus.set(uid, new EventEmitter()); return userBus.get(uid); }
 function emitTo(uid, event, payload) { try { chanFor(uid).emit('event', { event, payload, ts: Date.now() }); } catch {} }
 
-/* migrations */
+/* ---------- migrations (idempotent) ---------- */
 async function runMigrations() {
   const steps = [
     `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS password_hash TEXT`,
     `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS discord_id TEXT`,
     `DO $$
      BEGIN
-       IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_username_uniq')
-       THEN EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users((lower(username)))'; END IF;
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_username_uniq'
+       ) THEN
+         EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users((lower(username)))';
+       END IF;
      END$$;`,
     `DO $$
      BEGIN
-       IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_discord_id_uniq')
-       THEN EXECUTE 'CREATE UNIQUE INDEX users_discord_id_uniq ON users(discord_id) WHERE discord_id IS NOT NULL'; END IF;
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_discord_id_uniq'
+       ) THEN
+         EXECUTE 'CREATE UNIQUE INDEX users_discord_id_uniq ON users(discord_id) WHERE discord_id IS NOT NULL';
+       END IF;
      END$$;`
   ];
   for (const sql of steps) { try { await query(sql); } catch (e) { console.error('[migrations]', e?.message || e); } }
 }
 
-/* health */
+/* ---------- health ---------- */
 app.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-/* local accounts */
+/* ---------- local accounts ---------- */
 app.post('/auth/local/register', async (req, res) => {
   try {
     const b = bodyObj(req);
@@ -209,11 +208,9 @@ app.post('/auth/local/login', async (req, res) => {
     );
     const row = r.rows[0];
     if (!row) return res.status(401).json({ ok: false, error: 'invalid credentials' });
+    if (!row.password_hash) return res.status(409).json({ ok: false, error: 'no password set' });
 
-    const stored = row.password_hash;
-    if (!stored) return res.status(409).json({ ok: false, error: 'no password set' });
-
-    const ok = await verifyAndMaybeMigrateToRaw(row.id, password, stored);
+    const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ ok: false, error: 'invalid credentials' });
 
     const token = signToken({ id: row.id, username: row.username, avatar: row.avatar || '' });
@@ -227,7 +224,7 @@ app.post('/auth/local/login', async (req, res) => {
 app.post('/auth/local/set_password', auth, async (req, res) => {
   try {
     const b = bodyObj(req);
-    const password = String(b.password || req.query?.password || req.headers['x-password'] || '');
+    const password = String(b.password || '');
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'bad password' });
     const hash = await bcrypt.hash(password, 12);
     await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
@@ -238,7 +235,7 @@ app.post('/auth/local/set_password', auth, async (req, res) => {
   }
 });
 
-/* discord oauth */
+/* ---------- discord oauth (login + link) ---------- */
 app.get('/auth/discord', (req, res) => {
   const oauthRedirect = oauthRedirectBase(req);
   const next = String(req.query.redirect_uri || '').trim();
@@ -253,7 +250,6 @@ app.get('/auth/discord', (req, res) => {
   });
   res.redirect(`https://discord.com/api/oauth2/authorize?${params.toString()}`);
 });
-
 app.get('/api/link/discord/start', auth, async (req, res) => {
   try {
     const oauthRedirect = oauthRedirectBase(req);
@@ -272,7 +268,6 @@ app.get('/api/link/discord/start', auth, async (req, res) => {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
-
 app.get('/auth/discord/callback', async (req, res) => {
   try {
     const oauthRedirect = oauthRedirectBase(req);
@@ -298,10 +293,17 @@ app.get('/auth/discord/callback', async (req, res) => {
     const profile = { username: me.username || '', avatar: me.avatar || '' };
 
     if (state.purpose === 'link' && state.linkTo) {
-      try { await query('UPDATE users SET discord_id = $1, username = COALESCE(username, $2) WHERE id = $3', [discordId, profile.username, state.linkTo]); }
-      catch { return res.status(409).send('This Discord is already linked to another account.'); }
+      try {
+        await query('UPDATE users SET discord_id = $1, username = COALESCE(username, $2) WHERE id = $3', [discordId, profile.username, state.linkTo]);
+      } catch {
+        return res.status(409).send('This Discord is already linked to another account.');
+      }
       const next = String(state.next || '');
-      if (isAllowedDeepLink(next)) { const u = new URL(next); u.searchParams.set('linked', '1'); return res.redirect(u.toString()); }
+      if (isAllowedDeepLink(next)) {
+        const u = new URL(next);
+        u.searchParams.set('linked', '1');
+        return res.redirect(u.toString());
+      }
       return res.status(200).send('Discord account linked. You can close this window.');
     }
 
@@ -333,14 +335,14 @@ app.get('/auth/discord/callback', async (req, res) => {
   }
 });
 
-/* user/me */
+/* ---------- user/me ---------- */
 app.get('/api/me', auth, async (req, res) => {
   const r = await query('SELECT id, username, avatar, discord_id FROM users WHERE id = $1', [req.user.id]);
   const u = r.rows[0] || { id: req.user.id, username: req.user.name, avatar: '' };
   res.json({ ok: true, user: { id: u.id, name: u.username || '', avatar: u.avatar || '', discord_id: u.discord_id || null } });
 });
 
-/* favorites */
+/* ---------- favorites ---------- */
 app.get('/api/favorites/keys', auth, async (req, res) => {
   const r = await query('SELECT key FROM favorites WHERE user_id = $1 ORDER BY added_at DESC', [req.user.id]);
   res.json({ ok: true, keys: r.rows.map(x => x.key) });
@@ -407,7 +409,7 @@ app.post('/api/favorites/bulk_upsert', auth, async (req, res) => {
   }
 });
 
-/* sites */
+/* ---------- sites ---------- */
 app.get('/api/sites', auth, async (req, res) => {
   const r = await query(`
     SELECT site_id, name, type, base_url, rating, tags, credentials_enc, order_index
@@ -463,7 +465,7 @@ app.put('/api/sites', auth, async (req, res) => {
   }
 });
 
-/* SSE */
+/* ---------- SSE ---------- */
 app.get('/api/stream', auth, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -488,11 +490,11 @@ app.get('/api/stream', auth, async (req, res) => {
   send('hello', { ok: true, ts: Date.now() });
 });
 
-/* webhook */
+/* ---------- GitHub webhook (optional deploy) ---------- */
 function verifyWebhook(req, res, next) {
   try {
     const signature = req.headers['x-hub-signature'];
-    const payload = JSON.stringify(req.body || {});
+    const payload = JSON.stringify(req.body);
     if (!signature || !WEBHOOK_SECRET) return res.status(403).json({ error: 'Unauthorized' });
     const hmac = crypto.createHmac('sha1', WEBHOOK_SECRET);
     const digest = Buffer.from('sha1=' + hmac.update(payload).digest('hex'), 'utf8');
@@ -528,7 +530,7 @@ app.post('/webhook', verifyWebhook, (req, res) => {
   }
 });
 
-/* start */
+/* ---------- start ---------- */
 (async function start() {
   try { await runMigrations(); } catch (e) { console.error('[migrations] failed:', e?.message || e); }
   app.listen(PORT, HOST, () => {
