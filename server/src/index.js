@@ -444,7 +444,7 @@ app.put('/api/sites', auth, async (req, res) => {
   }
 });
 
-/* ---------- SSE (with query token + CORS for mobile) ---------- */
+/* ---------- SSE (token via query + CORS) ---------- */
 function authFromHeaderOrQuery(req) {
   const h = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/.exec(h);
@@ -453,9 +453,7 @@ function authFromHeaderOrQuery(req) {
   const decd = jwt.verify(token, JWT_SECRET);
   return { id: decd.sub, name: decd.name || '', avatar: decd.avatar || '' };
 }
-
 app.get('/api/stream', (req, res) => {
-  // CORS for EventSource from mobile/web
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -484,43 +482,60 @@ app.get('/api/stream', (req, res) => {
   send('hello', { ok: true, ts: Date.now() });
 });
 
-/* ---------- GitHub webhook ---------- */
-function verifyWebhook(req, res, next) {
+/* ---------- Image proxy (fallback for Android hotlink) ---------- */
+function isProxyAllowed(url) {
   try {
-    const signature = req.headers['x-hub-signature'];
-    const payload = JSON.stringify(req.body);
-    if (!signature || !WEBHOOK_SECRET) return res.status(403).json({ error: 'Unauthorized' });
-    const hmac = crypto.createHmac('sha1', WEBHOOK_SECRET);
-    const digest = Buffer.from('sha1=' + hmac.update(payload).digest('hex'), 'utf8');
-    const checksum = Buffer.from(signature, 'utf8');
-    if (checksum.length !== digest.length || !crypto.timingSafeEqual(digest, checksum)) {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
-    next();
-  } catch { return res.status(403).json({ error: 'Unauthorized' }); }
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase();
+    const okProto = u.protocol === 'https:' || u.protocol === 'http:';
+    const allow =
+      h.endsWith('donmai.us') ||
+      h === 'files.yande.re' ||
+      h === 'konachan.com' || h === 'konachan.net' ||
+      h.endsWith('e621.net') || h.endsWith('e926.net') ||
+      h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
+      h.endsWith('gelbooru.com') || h.endsWith('safebooru.org') ||
+      h.endsWith('rule34.xxx') || h.endsWith('realbooru.com') || h.endsWith('xbooru.com') ||
+      h.endsWith('tbib.org') || h.endsWith('hypnohub.net');
+    return okProto && allow;
+  } catch { return false; }
 }
-app.post('/webhook', verifyWebhook, (req, res) => {
+function refererFor(url) {
   try {
-    const payload = req.body || {};
-    const ref = String(payload.ref || '');
-    const branch = ref.split('/').pop();
-    if (branch !== 'dev' && branch !== 'master') {
-      return res.status(200).send('Webhook received but not for the dev or master branch.');
-    }
-    const deployScript = path.join(__dirname, 'deploy.sh');
-    console.log(`Webhook received for ${branch} branch. Deploying...`);
-    exec(`${deployScript} ${branch}`, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`deploy.sh (${branch}) error:`, error.message);
-        return res.status(500).send(`Deployment script for ${branch} failed`);
-      }
-      if (stderr) console.error(`deploy.sh (${branch}) stderr:`, stderr);
-      console.log(`deploy.sh (${branch}) stdout:`, stdout);
-      res.status(200).send(`Webhook received and deployment for ${branch} triggered successfully`);
-    });
+    const h = new URL(url).hostname.toLowerCase();
+    if (h.endsWith('donmai.us')) return 'https://danbooru.donmai.us';
+    if (h.endsWith('yande.re')) return 'https://yande.re';
+    if (h.endsWith('konachan.com')) return 'https://konachan.com';
+    if (h.endsWith('konachan.net')) return 'https://konachan.net';
+    if (h.endsWith('hypnohub.net')) return 'https://hypnohub.net';
+    if (h.endsWith('tbib.org')) return 'https://tbib.org';
+    if (h.endsWith('gelbooru.com')) return 'https://gelbooru.com';
+    if (h.endsWith('safebooru.org')) return 'https://safebooru.org';
+    if (h.endsWith('e621.net') || h.endsWith('e926.net')) return 'https://e621.net';
+    if (h.endsWith('derpicdn.net') || h.endsWith('derpibooru.org')) return 'https://derpibooru.org';
+    return '';
+  } catch { return ''; }
+}
+app.get('/imgproxy', async (req, res) => {
+  try {
+    const url = String(req.query.url || '');
+    if (!url || !isProxyAllowed(url)) return res.status(400).send('Bad url');
+    const hdr = {
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36',
+      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+    };
+    const ref = refererFor(url);
+    if (ref) { hdr['Referer'] = ref; hdr['Origin'] = ref; }
+    const r = await fetch(url, { headers: hdr });
+    if (!r.ok) return res.status(r.status).end(`Upstream ${r.status}`);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    const ct = r.headers.get('content-type') || 'application/octet-stream';
+    res.setHeader('Content-Type', ct);
+    r.body.pipe(res);
   } catch (e) {
-    console.error('Webhook error:', e?.message || e);
-    res.status(500).send('Webhook handler error');
+    console.error('imgproxy error', e);
+    res.status(500).end('proxy error');
   }
 });
 

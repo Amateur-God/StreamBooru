@@ -244,8 +244,7 @@ async function fetchBatch() {
   state.loading = true; loadingEl.classList.remove('hidden'); loadingEl.textContent = 'Loading…';
 
   if (state.viewType === 'faves') {
-    // Auto-pull remote faves when opening the tab (Android/Web build supports it)
-    try { await window.api.syncPullFavorites?.(); } catch {}
+    // Show instantly from local; SSE keeps local in sync in background.
     const all = await window.api.getLocalFavorites();
     const filtered = (all || []).filter((p)=> tagsInclude(p, state.search));
     state.items = sortItems(filtered, 'faves');
