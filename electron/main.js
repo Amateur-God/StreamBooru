@@ -126,7 +126,13 @@ function saveFavorites(arr) {
 
 /* http */
 function applyDefaultHeaders(request, url, headers = {}) {
-  const h = { 'User-Agent': 'Mozilla/5.0 StreamBooru/Electron', Accept: '*/*', 'Accept-Language': 'en-US,en;q=0.9', Referer: url, ...headers };
+  const h = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    Accept: '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    Referer: url,
+    ...headers
+  };
   Object.entries(h).forEach(([k, v]) => request.setHeader(k, v));
 }
 function httpGetJson(url, headers = {}) {
@@ -414,7 +420,7 @@ ipcMain.handle('download:bulk', async (_evt, payload) => {
         const outPath = path.join(targetDir, filename);
         await new Promise((resolve, reject) => {
           const req = net.request({ url: it.url, method: 'GET' });
-          req.setHeader('User-Agent', 'Mozilla/5.0 StreamBooru/Electron');
+          req.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
           const file = fs.createWriteStream(outPath);
           req.on('response', (res) => { res.pipe(file); res.on('end', resolve); res.on('error', reject); });
           req.on('error', reject); req.end();

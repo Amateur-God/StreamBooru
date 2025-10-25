@@ -18,6 +18,9 @@ app.set('trust proxy', true);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 
+/* request log */
+app.use((req, _res, next) => { try { console.log(`${req.method} ${req.url}`); } catch {} next(); });
+
 /* ---------- config ---------- */
 const PORT = Number(process.env.PORT || 3000);
 const HOST = String(process.env.HOST || '0.0.0.0');
@@ -53,22 +56,15 @@ function auth(req, res, next) {
     res.status(401).json({ ok: false, error: 'invalid token' });
   }
 }
-function cryptoRandomId() {
-  return crypto.randomBytes(16).toString('hex');
-}
+function cryptoRandomId() { return crypto.randomBytes(16).toString('hex'); }
 function isAllowedDeepLink(url) {
   return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://');
 }
 
 /* ---------- per-user bus (SSE) ---------- */
 const userBus = new Map();
-function chanFor(uid) {
-  if (!userBus.has(uid)) userBus.set(uid, new EventEmitter());
-  return userBus.get(uid);
-}
-function emitTo(uid, event, payload) {
-  try { chanFor(uid).emit('event', { event, payload, ts: Date.now() }); } catch {}
-}
+function chanFor(uid) { if (!userBus.has(uid)) userBus.set(uid, new EventEmitter()); return userBus.get(uid); }
+function emitTo(uid, event, payload) { try { chanFor(uid).emit('event', { event, payload, ts: Date.now() }); } catch {} }
 
 /* ---------- migrations (idempotent) ---------- */
 async function runMigrations() {
@@ -77,19 +73,13 @@ async function runMigrations() {
     `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS discord_id TEXT`,
     `DO $$
      BEGIN
-       IF NOT EXISTS (
-         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_username_uniq'
-       ) THEN
-         EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users((lower(username)))';
-       END IF;
+       IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_username_uniq')
+       THEN EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users((lower(username)))'; END IF;
      END$$;`,
     `DO $$
      BEGIN
-       IF NOT EXISTS (
-         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_discord_id_uniq'
-       ) THEN
-         EXECUTE 'CREATE UNIQUE INDEX users_discord_id_uniq ON users(discord_id) WHERE discord_id IS NOT NULL';
-       END IF;
+       IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_discord_id_uniq')
+       THEN EXECUTE 'CREATE UNIQUE INDEX users_discord_id_uniq ON users(discord_id) WHERE discord_id IS NOT NULL'; END IF;
      END$$;`
   ];
   for (const sql of steps) { try { await query(sql); } catch (e) { console.error('[migrations]', e?.message || e); } }
@@ -128,7 +118,6 @@ app.post('/auth/local/login', async (req, res) => {
     const password = String(req.body?.password || '');
     if (!username || !password) return res.status(400).json({ ok: false, error: 'missing credentials' });
 
-    // Robust match: username (ci) OR direct id match if someone types their id
     const r = await query(
       `SELECT id, username, avatar, password_hash
        FROM users
@@ -224,7 +213,7 @@ app.get('/auth/discord/callback', async (req, res) => {
     if (state.purpose === 'link' && state.linkTo) {
       try {
         await query('UPDATE users SET discord_id = $1, username = COALESCE(username, $2) WHERE id = $3', [discordId, profile.username, state.linkTo]);
-      } catch (e) {
+      } catch {
         return res.status(409).send('This Discord is already linked to another account.');
       }
       const next = String(state.next || '');
