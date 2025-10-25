@@ -15,10 +15,13 @@ const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitiz
 
 const app = express();
 app.set('trust proxy', true);
+
+// body parsers
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
+app.use(express.text({ type: '*/*', limit: '1mb' })); // fallback parser for mis-labeled bodies
 
-/* request log */
+// request log
 app.use((req, _res, next) => { try { console.log(`${req.method} ${req.url}`); } catch {} next(); });
 
 /* ---------- config ---------- */
@@ -61,6 +64,26 @@ function isAllowedDeepLink(url) {
   return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://');
 }
 
+// normalize body regardless of content-type
+function bodyObj(req) {
+  const ct = String(req.headers['content-type'] || '').toLowerCase();
+  let b = req.body;
+  if (b == null) return {};
+  if (typeof b === 'object') return b;
+  if (typeof b === 'string') {
+    const s = b.trim();
+    if (!s) return {};
+    // try JSON first
+    if (ct.includes('json') || s.startsWith('{') || s.startsWith('[')) {
+      try { return JSON.parse(s); } catch {}
+    }
+    // try form
+    try { return Object.fromEntries(new URLSearchParams(s)); } catch {}
+    return {};
+  }
+  return {};
+}
+
 /* ---------- per-user bus (SSE) ---------- */
 const userBus = new Map();
 function chanFor(uid) { if (!userBus.has(uid)) userBus.set(uid, new EventEmitter()); return userBus.get(uid); }
@@ -91,8 +114,9 @@ app.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 /* ---------- local accounts ---------- */
 app.post('/auth/local/register', async (req, res) => {
   try {
-    const username = String(req.body?.username || '').trim();
-    const password = String(req.body?.password || '');
+    const b = bodyObj(req);
+    const username = String(b.username || '').trim();
+    const password = String(b.password || '');
     if (!username || username.length < 3) return res.status(400).json({ ok: false, error: 'bad username' });
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'bad password' });
 
@@ -114,8 +138,9 @@ app.post('/auth/local/register', async (req, res) => {
 
 app.post('/auth/local/login', async (req, res) => {
   try {
-    const username = String(req.body?.username || '').trim();
-    const password = String(req.body?.password || '');
+    const b = bodyObj(req);
+    const username = String(b.username || '').trim();
+    const password = String(b.password || '');
     if (!username || !password) return res.status(400).json({ ok: false, error: 'missing credentials' });
 
     const r = await query(
@@ -142,7 +167,8 @@ app.post('/auth/local/login', async (req, res) => {
 
 app.post('/auth/local/set_password', auth, async (req, res) => {
   try {
-    const password = String(req.body?.password || '');
+    const b = bodyObj(req);
+    const password = String(b.password || '');
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'bad password' });
     const hash = await bcrypt.hash(password, 12);
     await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
@@ -275,9 +301,9 @@ app.get('/api/favorites', auth, async (req, res) => {
 app.put('/api/favorites/:key', auth, async (req, res) => {
   try {
     const key = sanitizeFavoriteKey(req.params.key);
-    const post = clampPost(req.body?.post);
+    const post = clampPost(bodyObj(req)?.post);
     if (!key || !post) return res.status(400).json({ ok: false, error: 'bad key/post' });
-    const added_at = Number(req.body?.added_at) || Date.now();
+    const added_at = Number(bodyObj(req)?.added_at) || Date.now();
     await query(`
       INSERT INTO favorites (user_id, key, added_at, post_json)
       VALUES ($1, $2, $3, $4::jsonb)
@@ -302,7 +328,8 @@ app.delete('/api/favorites/:key', auth, async (req, res) => {
 });
 app.post('/api/favorites/bulk_upsert', auth, async (req, res) => {
   try {
-    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const b = bodyObj(req);
+    const items = Array.isArray(b.items) ? b.items : [];
     const now = Date.now();
     const client = await pool.connect();
     try {
@@ -351,7 +378,8 @@ app.get('/api/sites', auth, async (req, res) => {
 });
 app.put('/api/sites', auth, async (req, res) => {
   try {
-    const list = Array.isArray(req.body?.sites) ? req.body.sites : [];
+    const listRaw = bodyObj(req)?.sites;
+    const list = Array.isArray(listRaw) ? listRaw : [];
     if (list.length > 100) return res.status(400).json({ ok: false, error: 'too many sites' });
     const sanitized = list.map(sanitizeSiteInput).filter(s => s.type && s.base_url);
     const now = Date.now();
