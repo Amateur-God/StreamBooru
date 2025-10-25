@@ -115,8 +115,8 @@ jobs:
       - name: Preinstall Flatpak SDKs (optional)
         run: |
           flatpak --user install -y --noninteractive flathub \
-            org.freedesktop.Platform//23.08 \
-            org.freedesktop.Sdk//23.08
+            org.freedesktop.Platform//24.08 \
+            org.freedesktop.Sdk//24.08
 
       - name: Build Flatpak
         run: |
