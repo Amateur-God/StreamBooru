@@ -5,9 +5,9 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { EventEmitter } = require('events');
 const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
-const { query } = require('../db');
-const { enc, dec } = require('../crypto');
-const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('../sanitize');
+const { query } = require('./db');
+const { enc, dec } = require('./crypto');
+const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitize');
 const path = require('path');
 
 const app = express();
