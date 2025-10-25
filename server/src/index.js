@@ -7,7 +7,7 @@ const { EventEmitter } = require('events');
 const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 const crypto = require('crypto');
 
-const { query } = require('../db');
+const { query } = require('./db');
 
 const app = express();
 app.set('trust proxy', true);
@@ -341,7 +341,7 @@ app.post('/api/favorites/bulk_upsert', auth, async (req, res) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     const now = Date.now();
-    const { pool } = require('../db');
+    const { pool } = require('./db');
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
