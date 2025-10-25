@@ -16,13 +16,30 @@ const state = {
   feedSeen: new Set(),
   rrCursor: 0,
 
+  // Track which sites have no more pages
+  endedSites: new Set(),
+
   // Flow control
   noMoreResults: false,
   pendingFetch: false,
   fetchGen: 0,
 
+  // Cache per tab for instant tab switching
+  viewCache: {
+    new: { items: [], cursors: {}, feedSeen: new Set(), rrCursor: 0, search: '' },
+    popular: { items: [], cursors: {}, search: '' },
+    search: { items: [], cursors: {}, search: '' },
+    faves: { items: [], search: '' }
+  },
+
+  // While scrolling, lock ordering to avoid moving items above you
+  orderLock: false,
+
   // File naming
-  nameTemplate: null
+  nameTemplate: null,
+
+  // IO for infinite scroll sentinel
+  _io: null
 };
 
 // ---------- utils ----------
@@ -45,6 +62,44 @@ function tagsInclude(p, searchStr) {
   if (wanted.length === 0) return true;
   const hay = new Set((p.tags || []).map((t) => String(t).toLowerCase()));
   return wanted.every((t) => hay.has(String(t).toLowerCase()));
+}
+
+// Robust scroll helpers (Android WebView safe)
+function getScrollY() {
+  return (typeof window.scrollY === 'number' ? window.scrollY : 0)
+      || document.scrollingElement?.scrollTop
+      || document.documentElement?.scrollTop
+      || document.body?.scrollTop
+      || 0;
+}
+function getScrollHeight() {
+  const b = document.body;
+  const e = document.documentElement;
+  return Math.max(
+    b?.scrollHeight || 0, e?.scrollHeight || 0,
+    b?.offsetHeight || 0,  e?.offsetHeight || 0,
+    b?.clientHeight || 0,  e?.clientHeight || 0
+  );
+}
+function atTop(px = 200) { return getScrollY() <= px; }
+function scrollToTop() {
+  try {
+    (document.scrollingElement || document.documentElement || document.body).scrollTop = 0;
+    window.scrollTo(0, 0);
+    requestAnimationFrame(() => { try { (document.scrollingElement || document.documentElement || document.body).scrollTop = 0; window.scrollTo(0,0); } catch {} });
+  } catch {}
+}
+
+// Media activity helper: avoid DOM churn while media is active
+function anyMediaActive() {
+  try {
+    const medias = document.querySelectorAll('video,audio');
+    for (const m of medias) {
+      if (!m) continue;
+      if ((m.readyState >= 2 && !m.paused && !m.ended) || m.seeking) return true;
+    }
+  } catch {}
+  return false;
 }
 
 // Popularity helpers
@@ -235,22 +290,133 @@ function buildFileNameFromTemplate(post, index, template) {
 window.getFileNameForPost = (post, index=0) =>
   buildFileNameFromTemplate(post, index, state.nameTemplate || '{site}-{id}');
 
-// ---------- fetching / render ----------
+// ---------- render helpers ----------
+function ensureScrollSentinel() {
+  const feed = document.getElementById('feed');
+  if (!feed) return null;
+  let s = document.getElementById('scroll-sentinel');
+  if (!s) {
+    s = document.createElement('div');
+    s.id = 'scroll-sentinel';
+    s.style.width = '1px';
+    s.style.height = '1px';
+  }
+  if (s.parentNode !== feed) feed.appendChild(s);
+  else if (feed.lastElementChild !== s) feed.appendChild(s);
+  return s;
+}
+function observeSentinel() {
+  try {
+    if (!state._io) return;
+    const s = ensureScrollSentinel();
+    if (s) state._io.observe(s);
+  } catch {}
+}
+
+function renderAppend() {
+  const feed = document.getElementById('feed');
+  const start = feed.childElementCount;
+  for (let i = start; i < state.items.length; i++) feed.appendChild(window.PostCard(state.items[i], i));
+  ensureScrollSentinel(); observeSentinel();
+}
+function renderReplacePreserveScroll() {
+  const feed = document.getElementById('feed');
+  const topbarH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 64;
+  let anchorKey = null, anchorTop = null;
+  for (const child of Array.from(feed.children)) {
+    const rect = child.getBoundingClientRect();
+    if (rect.bottom > topbarH) { anchorKey = child.dataset?.key || null; anchorTop = rect.top; break; }
+  }
+  feed.innerHTML = '';
+  window.getGalleryItems = () => state.items;
+  for (let i=0;i<state.items.length;i++) feed.appendChild(window.PostCard(state.items[i], i));
+  if (anchorKey) {
+    const newAnchor = feed.querySelector(`[data-key="${CSS.escape(anchorKey)}"]`);
+    if (newAnchor && typeof anchorTop === 'number') {
+      const rect2 = newAnchor.getBoundingClientRect();
+      window.scrollBy(0, rect2.top - anchorTop);
+    }
+  }
+  ensureScrollSentinel(); observeSentinel();
+}
+function renderReplaceNoPreserve() {
+  const feed = document.getElementById('feed');
+  feed.innerHTML = '';
+  window.getGalleryItems = () => state.items;
+  for (let i=0;i<state.items.length;i++) feed.appendChild(window.PostCard(state.items[i], i));
+  ensureScrollSentinel(); observeSentinel();
+}
+window.getGalleryItems = () => state.items;
+
+// --------- caching current view (for instant tab switching) ----------
+function saveViewCache() {
+  const v = state.viewType;
+  const c = state.viewCache[v];
+  if (!c) return;
+  c.items = [...state.items];
+  c.cursors = { ...state.cursors };
+  c.search = state.search;
+  if (v === 'new') {
+    c.feedSeen = new Set(state.feedSeen);
+    c.rrCursor = state.rrCursor;
+  }
+}
+function restoreViewCache({ preserveScroll = true } = {}) {
+  const c = state.viewCache[state.viewType];
+  if (!c) return false;
+  state.items = [...(c.items || [])];
+  state.cursors = { ...(c.cursors || {}) };
+  state.search = c.search || '';
+  if (state.viewType === 'new') {
+    state.feedSeen = new Set(c.feedSeen || []);
+    state.rrCursor = c.rrCursor || 0;
+  }
+  if (state.items.length) {
+    if (preserveScroll) {
+      renderReplacePreserveScroll();
+    } else {
+      renderReplaceNoPreserve();
+      scrollToTop();
+    }
+    document.getElementById('loading').classList.add('hidden');
+    return true;
+  }
+  return false;
+}
+
+// ---------- fetching ----------
+function updateCursorAndEnd(key, res, prevCursor) {
+  if (res && Object.prototype.hasOwnProperty.call(res, 'nextCursor')) {
+    state.cursors[key] = res.nextCursor;
+    if (res.nextCursor === null) state.endedSites.add(key);
+  } else {
+    state.cursors[key] = prevCursor ?? null;
+  }
+}
+
+function allSitesEnded() {
+  const total = state.searchOrder.length;
+  if (total === 0) return false;
+  return state.searchOrder.every((k) => state.endedSites.has(k));
+}
+
 async function fetchBatch() {
   const loadingEl = document.getElementById('loading');
   if (state.noMoreResults) { loadingEl.classList.remove('hidden'); loadingEl.textContent = 'End of results'; return; }
   if (state.loading) { state.pendingFetch = true; return; }
+
   const gen = state.fetchGen;
   state.loading = true; loadingEl.classList.remove('hidden'); loadingEl.textContent = 'Loading…';
 
   if (state.viewType === 'faves') {
-    // Show instantly from local; SSE keeps local in sync in background.
     const all = await window.api.getLocalFavorites();
     const filtered = (all || []).filter((p)=> tagsInclude(p, state.search));
     state.items = sortItems(filtered, 'faves');
-    renderReplacePreserveScroll();
+    renderReplaceNoPreserve();
+    scrollToTop();
     loadingEl.classList.add('hidden');
     state.loading = false;
+    saveViewCache();
     if (state.pendingFetch) { state.pendingFetch = false; fetchBatch(); }
     return;
   }
@@ -262,10 +428,15 @@ async function fetchBatch() {
   const isPopular = state.viewType === 'popular';
   const isNew = state.viewType === 'new';
 
+  if (isPopular) {
+    await fetchPopularStreaming(sites, gen, loadingEl, doSearch);
+    return;
+  }
+
   const reqs = sites.map(async (site)=>{
     const s2 = { ...site, baseUrl: normalizeBaseUrl(site.baseUrl) };
     const key = siteKey(s2);
-    const cursor = state.cursors[key] || null;
+    const cursor = state.cursors[key] ?? 1;
     const res = await window.api.fetchBooru({
       site: s2,
       viewType: doSearch ? 'new' : state.viewType,
@@ -273,7 +444,7 @@ async function fetchBatch() {
       limit: 40,
       search: state.search || ''
     });
-    state.cursors[key] = res?.nextCursor ?? cursor ?? null;
+    updateCursorAndEnd(key, res, cursor);
     return { key, posts: Array.isArray(res?.posts) ? res.posts : [] };
   });
 
@@ -283,35 +454,44 @@ async function fetchBatch() {
   let addedTotal = 0;
 
   if (doSearch) {
-    for (const r of results) {
-      if (r.status !== 'fulfilled') continue;
-      const { key, posts } = r.value;
-      if (!state.searchBuckets.has(key)) state.searchBuckets.set(key, []);
-      const bucket = state.searchBuckets.get(key);
-      for (const p of posts) {
-        const k = itemKey(p);
-        if (state.searchSeen.has(k)) continue;
-        state.searchSeen.add(k);
-        bucket.push(p);
+    if (state.orderLock) {
+      const perSiteNew = new Map(); for (const k of state.searchOrder) perSiteNew.set(k, []);
+      for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        const { key, posts } = r.value;
+        if (!perSiteNew.has(key)) perSiteNew.set(key, []);
+        const arr = perSiteNew.get(key);
+        for (const p of posts) {
+          const k = itemKey(p);
+          if (state.searchSeen.has(k)) continue;
+          state.searchSeen.add(k);
+          arr.push(p);
+        }
       }
-    }
-    const before = state.items.length;
-    state.items = interleaveRoundRobin(state.searchOrder, state.searchBuckets);
-    addedTotal = Math.max(0, state.items.length - before);
-    if (addedTotal > 0) renderAppend();
-  } else if (isPopular) {
-    const collected = results.flatMap((r)=> r.status==='fulfilled'? r.value.posts : []);
-    const seen = new Set(state.items.map(itemKey));
-    const newbies = [];
-    for (const p of collected) { const k = itemKey(p); if (seen.has(k)) continue; newbies.push(p); seen.add(k); }
-    if (newbies.length > 0) {
-      const mergedSorted = sortItems(state.items.concat(newbies), 'popular');
-      const currKeys = state.items.map(itemKey);
-      const prefixKeys = mergedSorted.slice(0, currKeys.length).map(itemKey);
-      state.items = mergedSorted;
-      if (currKeys.length > 0 && currKeys.every((k,i)=>k===prefixKeys[i])) renderAppend();
-      else renderReplacePreserveScroll();
-      addedTotal = newbies.length;
+      const chunk = rrMergeAppend(state.searchOrder, perSiteNew, 0);
+      if (chunk.length > 0) {
+        const before = state.items.length;
+        state.items = state.items.concat(chunk);
+        addedTotal = state.items.length - before;
+        if (addedTotal > 0) renderAppend();
+      }
+    } else {
+      for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        const { key, posts } = r.value;
+        if (!state.searchBuckets.has(key)) state.searchBuckets.set(key, []);
+        const bucket = state.searchBuckets.get(key);
+        for (const p of posts) {
+          const k = itemKey(p);
+          if (state.searchSeen.has(k)) continue;
+          state.searchSeen.add(k);
+          bucket.push(p);
+        }
+      }
+      const before = state.items.length;
+      state.items = interleaveRoundRobin(state.searchOrder, state.searchBuckets);
+      addedTotal = Math.max(0, state.items.length - before);
+      if (addedTotal > 0) renderAppend();
     }
   } else if (isNew) {
     const perSiteNew = new Map(); for (const k of state.searchOrder) perSiteNew.set(k, []);
@@ -332,39 +512,80 @@ async function fetchBatch() {
     }
   }
 
-  if (addedTotal === 0) { state.noMoreResults = true; loadingEl.classList.remove('hidden'); loadingEl.textContent = 'End of results'; }
-  else { loadingEl.classList.add('hidden'); }
+  if (addedTotal === 0 && allSitesEnded()) {
+    state.noMoreResults = true; loadingEl.classList.remove('hidden'); loadingEl.textContent = 'End of results';
+  } else {
+    loadingEl.classList.add('hidden');
+  }
 
   state.loading = false;
+  saveViewCache();
   if (state.pendingFetch) { const runAgain = !state.noMoreResults; state.pendingFetch = false; if (runAgain) fetchBatch(); }
 }
 
-// ---------- render helpers ----------
-function renderAppend() {
-  const feed = document.getElementById('feed');
-  const start = feed.childElementCount;
-  for (let i = start; i < state.items.length; i++) feed.appendChild(window.PostCard(state.items[i], i));
-}
-function renderReplacePreserveScroll() {
-  const feed = document.getElementById('feed');
-  const topbarH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--topbar-h')) || 64;
-  let anchorKey = null, anchorTop = null;
-  for (const child of Array.from(feed.children)) {
-    const rect = child.getBoundingClientRect();
-    if (rect.bottom > topbarH) { anchorKey = child.dataset?.key || null; anchorTop = rect.top; break; }
+// Popular streaming fetch: render per-site as they arrive, but avoid reordering above user
+async function fetchPopularStreaming(sites, gen, loadingEl) {
+  if (!Array.isArray(state.searchOrder) || state.searchOrder.length === 0) {
+    state.searchOrder = (state.config.sites || []).map((s)=> siteKey(s));
   }
-  feed.innerHTML = '';
-  window.getGalleryItems = () => state.items;
-  for (let i=0;i<state.items.length;i++) feed.appendChild(window.PostCard(state.items[i], i));
-  if (anchorKey) {
-    const newAnchor = feed.querySelector(`[data-key="${CSS.escape(anchorKey)}"]`);
-    if (newAnchor && typeof anchorTop === 'number') {
-      const rect2 = newAnchor.getBoundingClientRect();
-      window.scrollBy(0, rect2.top - anchorTop);
-    }
+
+  let pending = sites.length;
+  const seen = new Set(state.items.map(itemKey));
+
+  for (const site of sites) {
+    const s2 = { ...site, baseUrl: normalizeBaseUrl(site.baseUrl) };
+    const key = siteKey(s2);
+    const cursor = state.cursors[key] ?? 1;
+
+    window.api.fetchBooru({
+      site: s2,
+      viewType: state.viewType,
+      cursor,
+      limit: 40,
+      search: state.search || ''
+    }).then((res)=>{
+      if (gen !== state.fetchGen) return;
+      updateCursorAndEnd(key, res, cursor);
+
+      const newbies = (res?.posts || []).filter((p) => {
+        const k = itemKey(p);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+
+      if (newbies.length === 0) return;
+
+      if (!state.orderLock && atTop() && !anyMediaActive()) {
+        const merged = state.items.concat(newbies);
+        const pop = computePopularity(merged);
+        merged.sort((a,b)=>popularCompare(a,b,pop));
+        state.items = merged;
+        renderReplacePreserveScroll();
+      } else {
+        const popNew = computePopularity(newbies);
+        const sortedNewbies = newbies.slice().sort((a,b)=>popularCompare(a,b,popNew));
+        const before = state.items.length;
+        state.items = state.items.concat(sortedNewbies);
+        if (state.items.length > before) renderAppend();
+      }
+    }).catch(()=>{}).finally(()=>{
+      pending--;
+      if (pending === 0) {
+        if (gen !== state.fetchGen) return;
+        if (allSitesEnded() && state.items.length === 0) {
+          document.getElementById('loading').textContent = 'End of results';
+          state.noMoreResults = true;
+        } else {
+          document.getElementById('loading').classList.add('hidden');
+        }
+        state.loading = false;
+        saveViewCache();
+        if (state.pendingFetch) { state.pendingFetch = false; fetchBatch(); }
+      }
+    });
   }
 }
-window.getGalleryItems = () => state.items;
 
 // ---------- Download All + Options popover ----------
 function sanitizeForFolder(s) { return String(s || '').replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').slice(0, 200); }
@@ -421,58 +642,61 @@ function openDownloadOptionsPopover(anchorEl) {
   if (btnClose) { btnClose.onclick = close; }
 }
 
-function setupDownloadAll() {
-  const btn = document.getElementById('btn-download-all');
-  const sel = document.getElementById('name-template');
-
-  let saved = localStorage.getItem('sb_name_tpl') || '{site}-{id}';
-  const oldCommaPreset = '{site},{score},{artist},{copyright},{character},{id}';
-  const newHyphenPreset = '{site}-{score}-{artist}-{copyright}-{character}-{id}';
-  if (saved === oldCommaPreset) {
-    saved = newHyphenPreset;
-    localStorage.setItem('sb_name_tpl', saved);
-  }
-  state.nameTemplate = saved;
-
-  if (sel) {
-    let matched = false;
-    for (const opt of Array.from(sel.options)) {
-      if (opt.value !== '__custom__' && opt.value === saved) { sel.value = opt.value; matched = true; break; }
+// Safe setup for Download All controls (avoid init crash when not present)
+function safeSetupDownloadAll() {
+  try {
+    if (typeof window.setupDownloadAll === 'function') {
+      window.setupDownloadAll();
+      return;
     }
-    if (!matched) sel.value = '__custom__';
+    const btnAll = document.getElementById('btn-download-all');
+    if (btnAll) btnAll.addEventListener('click', onDownloadAllClick);
 
-    sel.addEventListener('change', () => {
-      let v = sel.value;
-      if (v === '__custom__') {
-        const current = state.nameTemplate || '{site}-{id}';
-        const entered = window.prompt(
-          'Enter a custom filename template.\nTokens:\n{site} {site_type} {id} {score} {favorites} {rating} {width} {height} {index} {ext} {original_name} {created} {created_yyyy} {created_mm} {created_dd} {created_hhmm} {artist} {copyright} {character}',
-          current
-        );
-        if (entered && entered.trim()) v = entered.trim();
-        else v = current;
-        sel.value = '__custom__';
-      }
-      state.nameTemplate = v;
-      localStorage.setItem('sb_name_tpl', v);
-    });
-  }
-
-  if (btn) {
-    btn.addEventListener('click', (e) => {
-      if (e.shiftKey || e.altKey) { e.preventDefault(); openDownloadOptionsPopover(btn); }
-      else onDownloadAllClick();
-    });
-    btn.addEventListener('contextmenu', (e) => { e.preventDefault(); openDownloadOptionsPopover(btn); });
+    const btnOpt = document.getElementById('btn-download-options');
+    if (btnOpt) btnOpt.addEventListener('click', () => openDownloadOptionsPopover(btnOpt));
+  } catch (e) {
+    console.warn('safeSetupDownloadAll failed', e);
   }
 }
 
 // ---------- Tabs/Search/Manage/Scroll ----------
 function setupTabs() {
-  document.getElementById('tab-new').addEventListener('click', ()=>{ if (state.viewType !== 'new') { state.viewType = 'new'; setActiveTab(); clearFeed(); fetchBatch(); } });
-  document.getElementById('tab-popular').addEventListener('click', ()=>{ if (state.viewType !== 'popular') { state.viewType = 'popular'; setActiveTab(); clearFeed(); fetchBatch(); } });
-  document.getElementById('tab-search').addEventListener('click', ()=>{ if (state.viewType !== 'search') { state.viewType = 'search'; setActiveTab(); clearFeed(); fetchBatch(); } });
-  document.getElementById('tab-faves').addEventListener('click', ()=>{ if (state.viewType !== 'faves') { state.viewType = 'faves'; setActiveTab(); clearFeed(); fetchBatch(); } });
+  document.getElementById('tab-new').addEventListener('click', ()=>{
+    if (state.viewType !== 'new') {
+      saveViewCache();
+      state.viewType = 'new';
+      setActiveTab();
+      if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
+      else { scrollToTop(); }
+    }
+  });
+  document.getElementById('tab-popular').addEventListener('click', ()=>{
+    if (state.viewType !== 'popular') {
+      saveViewCache();
+      state.viewType = 'popular';
+      setActiveTab();
+      if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
+      else { scrollToTop(); }
+    }
+  });
+  document.getElementById('tab-search').addEventListener('click', ()=>{
+    if (state.viewType !== 'search') {
+      saveViewCache();
+      state.viewType = 'search';
+      setActiveTab();
+      if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
+      else { scrollToTop(); }
+    }
+  });
+  document.getElementById('tab-faves').addEventListener('click', ()=>{
+    if (state.viewType !== 'faves') {
+      saveViewCache();
+      state.viewType = 'faves';
+      setActiveTab();
+      if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
+      else { scrollToTop(); }
+    }
+  });
 }
 function setActiveTab() {
   document.querySelectorAll('.tab').forEach((t)=>t.classList.remove('active'));
@@ -490,17 +714,30 @@ function clearFeed() {
   state.searchSeen = new Set();
   state.feedSeen = new Set();
   state.rrCursor = 0;
+  state.endedSites = new Set();
   state.noMoreResults = false;
   state.pendingFetch = false;
   state.fetchGen++;
+  state.orderLock = false;
   document.getElementById('feed').innerHTML = '';
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('loading').textContent = 'Loading…';
+  ensureScrollSentinel(); observeSentinel();
 }
 function setupSearch() {
   const form = document.getElementById('search-form');
   const input = document.getElementById('tag-search');
   const btnClear = document.getElementById('tag-clear-btn');
   if (state.search) input.value = state.search;
-  form.addEventListener('submit', (e)=>{ e.preventDefault(); state.search = (input.value || '').trim(); state.viewType = 'search'; setActiveTab(); clearFeed(); fetchBatch(); });
+  form.addEventListener('submit', (e)=>{
+    e.preventDefault();
+    state.search = (input.value || '').trim();
+    state.viewType = 'search';
+    setActiveTab();
+    clearFeed();
+    scrollToTop();
+    fetchBatch();
+  });
   btnClear.addEventListener('click', ()=>{
     if (!input.value && !state.search) return;
     input.value = '';
@@ -508,6 +745,7 @@ function setupSearch() {
     if (state.viewType === 'search') state.viewType = 'new';
     setActiveTab();
     clearFeed();
+    scrollToTop();
     fetchBatch();
   });
 }
@@ -525,6 +763,7 @@ function setupManageSites() {
           const acct = await window.api.accountGet?.();
           if (acct?.loggedIn) await window.api.sitesSaveRemote(state.config.sites || []);
         } catch {}
+        scrollToTop();
         fetchBatch();
       }, () => {});
     } catch (err) {
@@ -534,19 +773,41 @@ function setupManageSites() {
   });
 }
 function setupInfiniteScroll() {
-  window.addEventListener('scroll', ()=>{
-    const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 800;
+  // Scroll-based fallback
+  const onScroll = ()=>{
+    if (!state.orderLock && getScrollY() > 300) state.orderLock = true;
+    const nearBottom = (window.innerHeight + getScrollY()) >= (getScrollHeight() - 800);
     if (nearBottom && !state.loading && !state.noMoreResults) fetchBatch();
-  });
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  document.addEventListener('scroll', onScroll, { passive: true });
+
+  // IntersectionObserver sentinel (more reliable on Android WebView)
+  if ('IntersectionObserver' in window) {
+    try {
+      state._io?.disconnect?.();
+    } catch {}
+    try {
+      state._io = new IntersectionObserver((entries)=>{
+        for (const en of entries) {
+          if (en.isIntersecting && !state.loading && !state.noMoreResults) {
+            fetchBatch();
+          }
+        }
+      }, { root: null, rootMargin: '1200px 0px', threshold: 0 });
+      observeSentinel();
+    } catch {}
+  }
 }
 
-// ---------- Events: config + instant favorites ----------
+// ---------- Events: config + instant favorites + account ----------
 (function subscribeConfigEvents() {
   window.events?.onConfigChanged?.(async (cfg) => {
     if (cfg && typeof cfg === 'object') {
+      saveViewCache();
       state.config = cfg || { sites: [] };
       state.searchOrder = (state.config.sites || []).map((s)=> siteKey(s));
-      clearFeed(); fetchBatch();
+      clearFeed(); scrollToTop(); fetchBatch();
     }
   });
 })();
@@ -557,7 +818,14 @@ function setupInfiniteScroll() {
       window.__localFavsSet = new Set(keys || []);
     } catch {}
     if (state.viewType === 'faves') {
-      clearFeed(); await fetchBatch();
+      clearFeed(); scrollToTop(); await fetchBatch();
+    }
+  });
+})();
+(function subscribeAccountEvents() {
+  window.events?.onAccountChanged?.(async () => {
+    if (state.viewType === 'faves') {
+      clearFeed(); scrollToTop(); await fetchBatch();
     }
   });
 })();
@@ -604,7 +872,7 @@ window.toggleLocalFavorite = async (post) => {
     if (res?.ok) {
       if (res.favorited) window.__localFavsSet.add(key);
       else window.__localFavsSet.delete(key);
-      if (state.viewType === 'faves') { clearFeed(); await fetchBatch(); }
+      if (state.viewType === 'faves') { clearFeed(); scrollToTop(); await fetchBatch(); }
     } else {
       alert(`Save failed: ${res?.error || 'unknown error'}`);
     }
@@ -624,9 +892,18 @@ async function init() {
   setupSearch();
   setupManageSites();
   setupInfiniteScroll();
-  setupDownloadAll();
+
+  // Safe optional download wiring (prevents init crash)
+  safeSetupDownloadAll();
+
   setActiveTab();
-  clearFeed();
-  fetchBatch();
+
+  if (!restoreViewCache({ preserveScroll: false })) {
+    clearFeed();
+    scrollToTop();
+    fetchBatch();
+  } else {
+    scrollToTop();
+  }
 }
 init();

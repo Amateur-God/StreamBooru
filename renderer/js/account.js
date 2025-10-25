@@ -153,9 +153,16 @@
     // events
     const escHandler = (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); } };
     const backdropHandler = (e) => { if (e.target === root) close(); };
+
+    // account change event (Discord deep link returns, logout, etc.)
+    let stopAccountWatch = null;
+    const onAccountChanged = async () => { try { await refresh(); } catch {} };
+
     function close() {
       document.removeEventListener('keydown', escHandler, true);
       root.removeEventListener('click', backdropHandler, true);
+      try { window.events?.off?.('account_changed', onAccountChanged); } catch {}
+      try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
       root.classList.add('hidden');
       root.setAttribute('aria-hidden', 'true');
       root.innerHTML = '';
@@ -163,6 +170,7 @@
     closeBtn.addEventListener('click', close);
     document.addEventListener('keydown', escHandler, true);
     root.addEventListener('click', backdropHandler, true);
+    window.events?.on?.('account_changed', onAccountChanged);
 
     // auto-persist server on change
     serverSelect.addEventListener('change', async () => {
@@ -208,6 +216,22 @@
       }, 0);
     }
 
+    function startAccountWatch({ stopWhenLoggedIn = true, maxMs = 60000, intervalMs = 1500 } = {}) {
+      let cancelled = false;
+      const t0 = Date.now();
+      async function tick() {
+        if (cancelled) return;
+        try {
+          const a = await (window.api.accountGet?.() || {});
+          await refresh();
+          if ((stopWhenLoggedIn && a?.loggedIn) || (Date.now() - t0 > maxMs)) { cancelled = true; return; }
+        } catch {}
+        if (!cancelled) setTimeout(tick, intervalMs);
+      }
+      setTimeout(tick, intervalMs);
+      return () => { cancelled = true; };
+    }
+
     btnUseServer.addEventListener('click', async () => {
       await window.api.accountSetServer?.(serverSelect.value);
       await refresh();
@@ -250,6 +274,8 @@
             alert('Discord account linked.');
           } else {
             alert('Continue the Discord consent in your browser to complete linking.');
+            try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
+            stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: false, maxMs: 60000, intervalMs: 1500 });
           }
         }
       } finally { btnLinkDiscord.disabled = false; await refresh(); }
@@ -269,7 +295,11 @@
         btnLoginDiscord.disabled = true;
         const res = await window.api.accountLoginDiscord?.();
         if (!res?.ok) alert('Login failed' + (res?.error ? `: ${res.error}` : ''));
-        else { alert('Follow the browser flow; you’ll return to the app automatically.'); }
+        else {
+          alert('Follow the browser flow; you’ll return to the app automatically.');
+          try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
+          stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 60000, intervalMs: 1500 });
+        }
       } finally { btnLoginDiscord.disabled = false; await refresh(); }
     });
 

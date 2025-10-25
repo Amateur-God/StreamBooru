@@ -314,7 +314,7 @@ app.get('/api/me', auth, async (req, res) => {
   res.json({ ok: true, user: { id: u.id, name: u.username || '', avatar: u.avatar || '', discord_id: u.discord_id || null } });
 });
 
-/* ---------- favourites (primary, British) ---------- */
+/* ---------- favourites (British primary) ---------- */
 app.get('/api/favourites/keys', auth, async (req, res) => {
   const r = await query('SELECT key FROM favorites WHERE user_id = $1 ORDER BY added_at DESC', [req.user.id]);
   res.json({ ok: true, keys: r.rows.map(x => x.key) });
@@ -482,7 +482,7 @@ app.get('/api/stream', (req, res) => {
   send('hello', { ok: true, ts: Date.now() });
 });
 
-/* ---------- Image proxy (fallback for Android hotlink) ---------- */
+/* ---------- Image proxy (fallback for hotlink-protected CDNs) ---------- */
 function isProxyAllowed(url) {
   try {
     const u = new URL(url);
@@ -517,21 +517,63 @@ function refererFor(url) {
   } catch { return ''; }
 }
 app.get('/imgproxy', async (req, res) => {
+  // CORS for browser builds too
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Vary', 'Origin');
+
   try {
     const url = String(req.query.url || '');
     if (!url || !isProxyAllowed(url)) return res.status(400).send('Bad url');
+
+    // Optional explicit referer from client (e.g. the actual post page)
+    const refParam = String(req.query.ref || '').trim();
+
     const hdr = {
       'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36',
       'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
     };
-    const ref = refererFor(url);
-    if (ref) { hdr['Referer'] = ref; hdr['Origin'] = ref; }
+
+    let refFinal = '';
+    if (refParam) {
+      // Only allow referers from known sites to avoid open-proxy abuse
+      try {
+        const u = new URL(refParam);
+        const h = u.hostname.toLowerCase();
+        const allowRef =
+          h.endsWith('donmai.us') ||
+          h.endsWith('yande.re') ||
+          h.endsWith('konachan.com') || h.endsWith('konachan.net') ||
+          h.endsWith('e621.net') || h.endsWith('e926.net') ||
+          h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
+          h.endsWith('gelbooru.com') || h.endsWith('safebooru.org') ||
+          h.endsWith('tbib.org') || h.endsWith('hypnohub.net') ||
+          h.endsWith('rule34.xxx') || h.endsWith('realbooru.com') || h.endsWith('xbooru.com');
+        if (allowRef) refFinal = u.toString();
+      } catch {}
+    }
+    if (!refFinal) refFinal = refererFor(url);
+
+    if (refFinal) {
+      try {
+        const o = new URL(refFinal);
+        hdr['Referer'] = refFinal;
+        hdr['Origin'] = `${o.protocol}//${o.host}`;
+      } catch {
+        hdr['Referer'] = refFinal;
+      }
+    }
+
     const r = await fetch(url, { headers: hdr });
-    if (!r.ok) return res.status(r.status).end(`Upstream ${r.status}`);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    if (!r.ok) {
+      res.status(r.status).end(`Upstream ${r.status}`);
+      return;
+    }
+
     const ct = r.headers.get('content-type') || 'application/octet-stream';
     res.setHeader('Content-Type', ct);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+
+    // Stream the image back
     r.body.pipe(res);
   } catch (e) {
     console.error('imgproxy error', e);

@@ -2,7 +2,19 @@
   const openExternal = (url) => { if (url) window.api.openExternal(url); };
   const isAndroid = () => !!(window.Platform && typeof window.Platform.isAndroid === 'function' && window.Platform.isAndroid());
 
-  const pickThumb = (post) => post.sample_url || post.file_url || post.preview_url || '';
+  const isVideoUrl = (u) => {
+    try { const p = new URL(u, 'https://x/').pathname.toLowerCase(); return /\.(mp4|webm|mov|m4v)$/i.test(p); }
+    catch { return /\.(mp4|webm|mov|m4v)$/i.test(String(u || '').toLowerCase()); }
+  };
+
+  // Prefer preview image for any video post to avoid putting video into <img>
+  const pickThumb = (post) => {
+    const f = post.file_url || '';
+    const s = post.sample_url || '';
+    const p = post.preview_url || '';
+    if ((isVideoUrl(f) || isVideoUrl(s)) && p) return p;
+    return s || f || p || '';
+  };
 
   function isHotlinkHost(u) {
     try {
@@ -57,16 +69,18 @@
     }
   }
 
-  async function tryProxyImage(imgEl, url) {
+  async function tryProxyImage(imgEl, url, post) {
     try {
       if (!window.api?.proxyImage || !url || imgEl._proxiedOnce) return;
+      // Never try to proxy a video into <img>
+      if (isVideoUrl(url)) return;
       imgEl._proxiedOnce = true;
       const prox = await window.api.proxyImage(url);
       if (prox?.ok && (prox.url || prox.dataUrl)) {
         imgEl.src = prox.url || prox.dataUrl;
         imgEl.removeAttribute('srcset');
       }
-    } catch (e) { console.error('proxyImage failed', e); }
+    } catch (e) { console.warn('proxyImage failed (thumb)', e); }
   }
 
   const buildActions = (post, idx) => {
@@ -130,18 +144,19 @@
     const thumbUrl = pickThumb(post);
     img.src = thumbUrl;
 
+    // Only include image URLs in srcset (skip video URLs)
     const candidates = [];
-    if (post.sample_url) candidates.push(`${post.sample_url} 1x`);
-    if (post.file_url && post.file_url !== post.sample_url) candidates.push(`${post.file_url} 2x`);
+    if (post.sample_url && !isVideoUrl(post.sample_url)) candidates.push(`${post.sample_url} 1x`);
+    if (post.file_url && post.file_url !== post.sample_url && !isVideoUrl(post.file_url)) candidates.push(`${post.file_url} 2x`);
     if (candidates.length) img.srcset = candidates.join(', ');
 
-    img.addEventListener('error', () => tryProxyImage(img, thumbUrl));
+    img.addEventListener('error', () => tryProxyImage(img, thumbUrl, post));
     if (isAndroid() && thumbUrl) {
       if (isHotlinkHost(thumbUrl)) {
-        tryProxyImage(img, thumbUrl);
+        tryProxyImage(img, thumbUrl, post);
       } else {
-        let t = setTimeout(() => tryProxyImage(img, thumbUrl), 1500);
-        const clear = () => { clearTimeout(t); t = null; };
+        let t = setTimeout(() => tryProxyImage(img, thumbUrl, post), 1500);
+        const clear = () => { if (t) { clearTimeout(t); t = null; } };
         img.addEventListener('load', clear, { once: true });
         img.addEventListener('error', clear, { once: true });
       }

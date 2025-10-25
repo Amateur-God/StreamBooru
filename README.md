@@ -57,6 +57,13 @@ StreamBooru elegantly merges posts from various engines like Danbooru, Gelbooru,
 
 Choose the easiest method for your system:
 
+>[!WARNING] Use Official Releases, Not the `main` Branch
+>
+>The `main` branch is for active development and is not guaranteed to be stable. It often contains untested updates.
+>
+>For a stable, tested version, please download from the Releases page (which uses version tags).
+>
+
 ### 1) One-Liner Install (Linux)
 
 This command downloads the latest release and installs the best package for your Linux distribution (Deb → Flatpak → tar.gz), adding a launcher and the `streambooru` command.
