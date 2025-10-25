@@ -65,7 +65,6 @@ app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 /* paths */
@@ -142,7 +141,13 @@ function httpDelete(url, headers = {}) {
     const req = net.request({ url, method: 'DELETE' });
     applyDefaultHeaders(req, url, headers);
     let data = '';
-    req.on('response', (res) => { res.on('data', (c)=> data += c); res.on('end', () => { try { resolve({ status: res.statusCode || 0, json: JSON.parse(data) }); } catch { resolve({ status: res.statusCode || 0, json: null }); } }); });
+    req.on('response', (res) => {
+      const status = res.statusCode || 0;
+      res.on('data', (c)=> data += c);
+      res.on('end', () => {
+        try { resolve({ status, json: JSON.parse(data) }); } catch { resolve({ status, json: null }); }
+      });
+    });
     req.on('error', () => resolve({ status: 0, json: null })); req.end();
   });
 }
@@ -151,7 +156,14 @@ function httpDelete(url, headers = {}) {
 const adapters = {
   danbooru: new Danbooru(httpGetJson, null, httpDelete),
   moebooru: new Moebooru(httpGetJson, null),
-  gelbooru: new Gelbooru(httpGetJson, (u,h)=>new Promise((resolve,reject)=>{const r=net.request({url:u,method:'GET'});applyDefaultHeaders(r,u,h||{});let d='';r.on('response',(res)=>{res.on('data',(c)=>d+=c);res.on('end',()=>resolve(d));});r.on('error',reject);r.end();})),
+  gelbooru: new Gelbooru(
+    httpGetJson,
+    (u,h)=>new Promise((resolve,reject)=>{
+      const r=net.request({url:u,method:'GET'}); applyDefaultHeaders(r,u,h||{}); let d='';
+      r.on('response',(res)=>{res.on('data',(c)=>d+=c); res.on('end',()=>resolve(d));});
+      r.on('error',reject); r.end();
+    })
+  ),
   e621: new E621(httpGetJson),
   derpibooru: new Derpibooru(httpGetJson)
 };
@@ -407,7 +419,9 @@ ipcMain.handle('booru:rateLimit', async (_evt, payload) => {
       const req = net.request({ url, method: 'GET' });
       applyDefaultHeaders(req, url, { Accept: 'application/json' });
       req.on('response', (res) => {
-        const headers = {}; Object.entries(res.headers || {}).forEach(([k, v]) => { headers[String(k).toLowerCase()] = Array.isArray(v) ? v[0] : String(v); });
+        const headers = {}; Object.entries(res.headers || {}).forEach(([k, v]) => {
+          headers[String(k).toLowerCase()] = Array.isArray(v) ? v[0] : String(v);
+        });
         const getH = (n) => headers[n] || headers[n.replace('ratelimit', 'rate-limit')] || null;
         const limit = Number(getH('x-ratelimit-limit')) || Number(getH('x-rate-limit-limit')) || null;
         const remaining = Number(getH('x-ratelimit-remaining')) || Number(getH('x-rate-limit-remaining')) || null;
@@ -508,7 +522,72 @@ ipcMain.handle('account:loginDiscord', async () => {
   });
   return result;
 });
-ipcMain.handle('account:logout', async () => { closeEventStream(); const acc = readAccount(); writeAccount({ serverBase: acc.serverBase || 'https://streambooru.co.uk', token: '', user: null }); return { ok: true }; });
+
+/* New: start Discord linking for current user and wait for callback */
+ipcMain.handle('account:linkDiscord', async () => {
+  try {
+    const acc = readAccount();
+    if (!acc.serverBase || !acc.token) return { ok: false, error: 'Not logged in' };
+
+    const srv = http.createServer((req, res) => {
+      try {
+        const u = new URL(req.url, `http://${req.headers.host}`);
+        if (u.pathname === '/callback') {
+          const linked = u.searchParams.get('linked') === '1';
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end('<h3>Discord linking complete. You can close this window.</h3>');
+          srv._linked = linked;
+          srv.close();
+          return;
+        }
+        res.statusCode = 400; res.end('Bad request');
+      } catch { res.statusCode = 500; res.end('Error'); }
+    });
+
+    await new Promise((resolve, reject) => { srv.listen(0, '127.0.0.1', resolve); srv.on('error', reject); });
+    const port = srv.address().port;
+    const next = `http://127.0.0.1:${port}/callback`;
+
+    const url = `${acc.serverBase.replace(/\/+$/,'')}/api/link/discord/start?next=${encodeURIComponent(next)}`;
+    const reqUrl = new URL(url).toString();
+    const linkStart = await new Promise((resolve) => {
+      const request = net.request({ url: reqUrl, method: 'GET' });
+      request.setHeader('Accept', 'application/json');
+      request.setHeader('Authorization', `Bearer ${acc.token}`);
+      let data = '';
+      request.on('response', (r) => {
+        r.on('data', (c) => data += c);
+        r.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(null); } });
+      });
+      request.on('error', () => resolve(null));
+      request.end();
+    });
+
+    if (!linkStart || !linkStart.ok || !linkStart.url) {
+      try { srv.close(); } catch {}
+      return { ok: false, error: 'Server refused link start' };
+    }
+
+    await shell.openExternal(linkStart.url);
+
+    const result = await new Promise((resolve) => {
+      const t = setTimeout(() => { try { srv.close(); } catch {} resolve({ ok: true, linked: false, timeout: true }); }, 120000);
+      srv.on('close', () => { clearTimeout(t); resolve({ ok: true, linked: !!srv._linked }); });
+    });
+
+    return result;
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle('account:logout', async () => {
+  closeEventStream();
+  const acc = readAccount();
+  writeAccount({ serverBase: acc.serverBase || 'https://streambooru.co.uk', token: '', user: null });
+  return { ok: true };
+});
 
 /* IPC: sync helpers */
 ipcMain.handle('sync:onLogin', async () => { await onLoginUnion(); return { ok: true }; });

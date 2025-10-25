@@ -3,6 +3,34 @@
 All notable changes to this project will be documented in this file.
 The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 
+## [v1.0.0] — 2025-10-25
+
+### Highlights
+* **Account Sync:** Introducing optional server-side account synchronization for favorites and site configurations across devices.
+* **Multiple Login Options:** Support for creating local accounts or logging in via Discord.
+* **Improved Mobile UI:** Enhanced mobile experience with a dedicated menu for navigation and actions.
+
+### Added
+* **Server Backend:** Added a Node.js backend (`server/`) for handling user accounts, authentication (local & Discord OAuth), and data synchronization (favorites, sites).
+* **Account Management:** New "Account" section in the UI (`renderer/js/account.js`) to manage server settings, login, registration, and logout.
+* **Cross-Device Sync:**
+    * Favorites are now synced with the server when logged in.
+    * Site configurations (including credentials) are synced.
+    * Real-time updates via Server-Sent Events (SSE) for changes pushed from other devices.
+* **Mobile Menu:** Implemented a hamburger menu (`renderer/js/mobile-menu.js`, `renderer/mobile.css`) for better usability on smaller screens or mobile platforms (like the Android build).
+* **Database Migrations:** SQL migration scripts added for setting up user, favorites, and sites tables (`server/src/migrations/`).
+* **Encryption:** User credentials stored in the database are encrypted (`server/src/crypto.js`).
+
+### Changed
+* **Preload Script (`electron/preload.js`):** Extended `window.api` to include functions for account management and synchronization.
+* **Renderer (`renderer/renderer.js`, `renderer/index.html`):** Integrated account button and sync logic. Site Manager now saves/loads site configurations via sync API when logged in.
+* **GitHub Actions:** Updated `release.yml`, `android.yml`, and `publish-aur.yml` workflows.
+
+### Fixed
+* Minor adjustments and fixes related to integrating the account system.
+
+[v1.0.0]: https://github.com/Amateur-God/StreamBooru/releases/tag/v1.0.0
+
 ## [v0.4.0] — 2025-10-18
 
 ### Highlights
