@@ -2,7 +2,7 @@ app-id: io.streambooru.StreamBooru
 runtime: org.freedesktop.Platform
 runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
-runtime-extensions:
+sdk-extensions:
   - org.freedesktop.Sdk.Extension.node20
 
 command: streambooru
