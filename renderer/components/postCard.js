@@ -8,6 +8,23 @@
   // Prefer larger sample/large image; preview last.
   const pickThumb = (post) => post.sample_url || post.file_url || post.preview_url || '';
 
+  // Hosts that commonly hotlink-block
+  function isHotlinkHost(u) {
+    try {
+      const h = new URL(u).hostname;
+      return (
+        h.endsWith('donmai.us') ||
+        h === 'files.yande.re' ||
+        h === 'konachan.com' || h === 'konachan.net' ||
+        h.endsWith('e621.net') || h.endsWith('e926.net') ||
+        h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
+        h.endsWith('gelbooru.com') || h.endsWith('safebooru.org') ||
+        h.endsWith('rule34.xxx') || h.endsWith('realbooru.com') || h.endsWith('xbooru.com') ||
+        h.endsWith('tbib.org') || h.endsWith('hypnohub.net')
+      );
+    } catch { return false; }
+  }
+
   // Tap helper: only fire on “true tap” (short + minimal move), not while scrolling
   function onTap(el, handler, opts = {}) {
     const maxMove = opts.maxMove ?? 10;   // px
@@ -43,6 +60,9 @@
   async function tryProxyImage(imgEl, url) {
     try {
       if (!window.api || typeof window.api.proxyImage !== 'function') return;
+      if (!url) return;
+      if (imgEl._proxiedOnce) return;
+      imgEl._proxiedOnce = true;
       const prox = await window.api.proxyImage(url);
       if (prox && prox.ok && (prox.url || prox.dataUrl)) {
         imgEl.src = prox.url || prox.dataUrl;
@@ -121,6 +141,18 @@
     if (candidates.length) img.srcset = candidates.join(', ');
 
     img.addEventListener('error', () => tryProxyImage(img, thumbUrl));
+
+    // Android proactive proxy for hotlinking hosts or if loading stalls
+    if (isAndroid() && thumbUrl) {
+      if (isHotlinkHost(thumbUrl)) {
+        tryProxyImage(img, thumbUrl);
+      } else {
+        let timer = setTimeout(() => tryProxyImage(img, thumbUrl), 1500);
+        const clearAll = () => { clearTimeout(timer); timer = null; };
+        img.addEventListener('load', clearAll, { once: true });
+        img.addEventListener('error', clearAll, { once: true });
+      }
+    }
 
     // Primary: robust pointer tap
     onTap(img, () => { if (window.openLightbox) window.openLightbox(post); });

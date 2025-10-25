@@ -1,6 +1,6 @@
 {
   "name": "streambooru",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "StreamBooru – Electron app to browse multiple booru sites with New and Popular feeds, merged across sources.",
   "main": "electron/main.js",
   "author": {

@@ -1,12 +1,5 @@
 /* StreamBooru platform adapter for Electron (desktop) and Capacitor (Android)
-   - Supplies window.api on Android/Web:
-     * load/save config (localStorage)
-     * fetchBooru (Danbooru, Yande.re/Moebooru, Gelbooru)
-         - Danbooru uses browser fetch; falls back to native HTTP when needed
-         - Gelbooru supports optional credentials (user_id, api_key) and XML fallback if JSON is blocked
-     * local favorites
-     * proxyImage(url) -> data URL (native HTTP) for hotlink-protected images
-   - Honors Site Manager rating dropdown (safe | questionable | explicit | any)
+   - Supplies window.api on Android/Web
 */
 (function () {
   // env
@@ -18,6 +11,7 @@
   const UA = 'Mozilla/5.0 (Linux; Android 12; StreamBooru) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36';
   function getHttp() { return C?.Plugins?.CapacitorHttp || C?.Plugins?.Http || null; }
   function originFrom(url) { try { return new URL(url).origin; } catch { return ''; } }
+  const b64 = (s) => { try { return typeof btoa === 'function' ? btoa(s) : Buffer.from(s, 'utf8').toString('base64'); } catch { return s; } };
 
   async function httpGetJSON(url, headers = {}) {
     const Http = getHttp();
@@ -265,13 +259,17 @@
     withDanbooruAuth(params, site);
     const url = `${baseUrl.replace(/\/+$/, '')}/posts.json?${params.toString()}`;
     try {
-      const r = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
-      const json = await r.json();
-      return Array.isArray(json) ? json : [];
-    } catch {
       const json = await httpGetJSON(url);
       return Array.isArray(json) ? json : [];
+    } catch {
+      try {
+        const r = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+        const json = await r.json();
+        return Array.isArray(json) ? json : [];
+      } catch {
+        return [];
+      }
     }
   }
   async function fetchMoebooru({ baseUrl, tags, page, limit }) {
@@ -341,13 +339,10 @@
     let raw = [];
     try {
       if (site.type === 'danbooru') {
-        try {
-          raw = await fetchDanbooru({ baseUrl, tags, page, limit: Math.min(30, limit), site });
-        } catch (e1) {
-          if (viewType === 'popular') {
-            const alt = tags.includes('order:rank') ? tags.replace('order:rank', 'order:score') : `order:score ${tags}`;
-            raw = await fetchDanbooru({ baseUrl, tags: alt.trim(), page, limit: Math.min(30, limit), site });
-          } else { throw e1; }
+        raw = await fetchDanbooru({ baseUrl, tags, page, limit: Math.min(30, limit), site });
+        if (viewType === 'popular' && Array.isArray(raw) && raw.length === 0) {
+          const alt = tags.includes('order:rank') ? tags.replace('order:rank', 'order:score') : `order:score ${tags}`;
+          raw = await fetchDanbooru({ baseUrl, tags: alt.trim(), page, limit: Math.min(30, limit), site });
         }
       } else if (site.type === 'moebooru') {
         raw = await fetchMoebooru({ baseUrl, tags, page, limit });
@@ -469,7 +464,6 @@
             }
             accSave(acc);
           } else if (linked) {
-            // Linking completed; refresh user profile on next UI open if needed
             const base = accGetBase(acc);
             if (base && acc.token) {
               try {
@@ -531,8 +525,16 @@
       accountRegister: async (username, password) => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base) return { ok: false, error: 'No server selected' };
-        const { status, json } = await httpPostJSON(`${base}/auth/local/register`, { username, password });
+
+        // JSON
+        let { status, json } = await httpPostJSON(`${base}/auth/local/register`, { username, password });
+        if (status >= 400 || !json?.token) {
+          // Basic fallback
+          const auth = 'Basic ' + b64(`${username}:${password}`);
+          ({ status, json } = await httpPostJSON(`${base}/auth/local/register`, {}, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
+        }
         if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Register failed' };
+
         acc.token = json.token;
         try { const me = await getMe(base, acc.token); if (me?.ok && me.user) acc.user = me.user; } catch {}
         accSave(acc);
@@ -541,8 +543,16 @@
       accountLoginLocal: async (username, password) => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base) return { ok: false, error: 'No server selected' };
-        const { status, json } = await httpPostJSON(`${base}/auth/local/login`, { username, password });
+
+        // JSON
+        let { status, json } = await httpPostJSON(`${base}/auth/local/login`, { username, password });
+        if (status >= 400 || !json?.token) {
+          // Basic fallback
+          const auth = 'Basic ' + b64(`${username}:${password}`);
+          ({ status, json } = await httpPostJSON(`${base}/auth/local/login`, {}, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
+        }
         if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Login failed' };
+
         acc.token = json.token;
         try { const me = await getMe(base, acc.token); if (me?.ok && me.user) acc.user = me.user; } catch {}
         accSave(acc);

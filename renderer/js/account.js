@@ -1,4 +1,5 @@
 (function () {
+  // elements
   function h(tag, attrs = {}, children = []) {
     const el = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
@@ -10,6 +11,7 @@
     return el;
   }
 
+  // styles
   function ensureStyles() {
     const id = 'account-modal-fix-styles';
     if (document.getElementById(id)) return;
@@ -30,6 +32,7 @@
     document.head.appendChild(style);
   }
 
+  // helpers
   function ensureOption(selectEl, value, label) {
     if (!value) return;
     const val = String(value).replace(/\/+$/,'');
@@ -62,6 +65,7 @@
     return i;
   }
 
+  // modal
   async function openAccountModal() {
     ensureStyles();
 
@@ -82,13 +86,11 @@
     const card = h('div', { className: 'site-card compact' });
     const status = h('div', { className: 'hint' });
 
-    // Server row
+    // server
     const serverRow = h('div', { className: 'actions-row' });
     const serverLabel = h('label', { text: 'Server' });
     const serverSelect = h('select');
     const SERVERS = [
-      //['https://streambooru.co.uk','streambooru.co.uk'],
-      //['https://streambooru.com','streambooru.com'],
       ['https://streambooru.ecchibooru.uk','streambooru.ecchibooru.uk']
     ];
     SERVERS.forEach(([val, label]) => {
@@ -99,21 +101,21 @@
     serverRow.appendChild(serverSelect);
     serverRow.appendChild(btnUseServer);
 
-    // Create account
+    // create
     const rowRegister = h('div', { className: 'fields-row' });
     const regUser = mkInput('New username', 'text');
     const regPass = mkInput('New password', 'password');
     const btnRegister = h('button', { className: 'link-btn accent', text: 'Create Account' });
     rowRegister.appendChild(regUser); rowRegister.appendChild(regPass); rowRegister.appendChild(btnRegister);
 
-    // Local login
+    // local login
     const rowLocal = h('div', { className: 'fields-row' });
     const userInput = mkInput('Username', 'text');
     const passInput = mkInput('Password', 'password');
     const btnLoginLocal = h('button', { className: 'link-btn', text: 'Login (Local)' });
     rowLocal.appendChild(userInput); rowLocal.appendChild(passInput); rowLocal.appendChild(btnLoginLocal);
 
-    // OAuth / link / logout
+    // oauth/link/logout
     const rowDiscord = h('div', { className: 'actions-row' });
     const btnLinkDiscord = h('button', { className: 'link-btn', text: 'Link Discord' });
     const btnLoginDiscord = h('button', { className: 'link-btn', text: 'Login with Discord' });
@@ -124,7 +126,7 @@
     rowDiscord.appendChild(btnLogout);
     rowDiscord.appendChild(linkBadge);
 
-    // Manual sync
+    // manual sync
     const rowInfo = h('div', { className: 'actions-row' });
     const btnPullFav = h('button', { className: 'link-btn', text: 'Pull favorites (manual)' });
     rowInfo.appendChild(btnPullFav);
@@ -146,6 +148,7 @@
     panel.appendChild(btns);
     root.appendChild(panel);
 
+    // events
     const escHandler = (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); } };
     const backdropHandler = (e) => { if (e.target === root) close(); };
     function close() {
@@ -159,7 +162,12 @@
     document.addEventListener('keydown', escHandler, true);
     root.addEventListener('click', backdropHandler, true);
 
-    // Events
+    // auto-persist server on change
+    serverSelect.addEventListener('change', async () => {
+      await window.api.accountSetServer?.(serverSelect.value);
+      await refresh();
+    });
+
     async function refresh() {
       const a = await (window.api.accountGet?.() || {});
       const curRaw = String(a.serverBase || '').trim();
@@ -169,28 +177,27 @@
         serverSelect.value = cur;
       } else if (cur.includes('.ecchibooru.')) {
         serverSelect.value = 'https://streambooru.ecchibooru.uk';
-      } else if (cur.includes('.com')) {
-        serverSelect.value = 'https://streambooru.com';
       } else {
-        serverSelect.value = 'https://streambooru.co.uk';
+        serverSelect.value = 'https://streambooru.ecchibooru.uk';
       }
+
+      // default server if none persisted
+      if (!a.serverBase) { await window.api.accountSetServer?.(serverSelect.value); }
 
       const who = a.user ? `${a.user.name || a.user.id}` : 'Not logged in';
       status.textContent = `Server: ${serverSelect.value} • ${a.loggedIn ? 'Logged in as ' + who : 'Not logged in'}`;
 
-      // Enable/disable actions
       const linked = !!a?.user?.discord_id;
       linkBadge.textContent = linked ? 'Discord linked' : 'Discord not linked';
       linkBadge.className = 'badge ' + (linked ? 'ok' : 'muted');
 
       btnLinkDiscord.disabled = !a.loggedIn || linked;
-      btnLoginDiscord.disabled = !serverSelect.value || a.loggedIn; // login with Discord only when not logged in
+      btnLoginDiscord.disabled = !serverSelect.value || a.loggedIn;
       btnLoginLocal.disabled = !serverSelect.value || a.loggedIn;
       btnRegister.disabled = !serverSelect.value || a.loggedIn;
       btnLogout.disabled = !a.loggedIn;
       btnPullFav.disabled = !a.loggedIn;
 
-      // Focus first relevant input
       setTimeout(() => {
         if (!a.loggedIn) regUser.focus();
         else if (!linked) btnLinkDiscord.focus();
@@ -209,6 +216,7 @@
         const u = regUser.value.trim();
         const p = regPass.value;
         if (!u || !p) { alert('Enter username and password'); return; }
+        await window.api.accountSetServer?.(serverSelect.value);
         const res = await window.api.accountRegister?.(u, p);
         if (!res?.ok) alert('Register failed' + (res?.error ? `: ${res.error}` : ''));
         else { await window.api.syncOnLogin?.(); alert('Account created and synced.'); }
@@ -221,13 +229,13 @@
         const u = userInput.value.trim();
         const p = passInput.value;
         if (!u || !p) { alert('Enter username and password'); return; }
+        await window.api.accountSetServer?.(serverSelect.value);
         const res = await window.api.accountLoginLocal?.(u, p);
         if (!res?.ok) alert('Login failed' + (res?.error ? `: ${res.error}` : ''));
         else { await window.api.syncOnLogin?.(); alert('Login complete. Synced.'); }
       } finally { btnLoginLocal.disabled = false; await refresh(); }
     });
 
-    // New: Link Discord to current account
     btnLinkDiscord.addEventListener('click', async () => {
       try {
         btnLinkDiscord.disabled = true;
@@ -235,7 +243,6 @@
         if (!res?.ok) {
           alert('Link start failed' + (res?.error ? `: ${res.error}` : ''));
         } else {
-          // If we waited for completion, res.linked may be true
           if (res.linked) {
             alert('Discord account linked.');
           } else {
@@ -245,13 +252,12 @@
       } finally { btnLinkDiscord.disabled = false; await refresh(); }
     });
 
-    // Existing: Login with Discord (not linked to local)
     btnLoginDiscord.addEventListener('click', async () => {
       try {
         btnLoginDiscord.disabled = true;
         const res = await window.api.accountLoginDiscord?.();
         if (!res?.ok) alert('Login failed' + (res?.error ? `: ${res.error}` : ''));
-        else { await window.api.syncOnLogin?.(); alert('Login complete. Synced.'); }
+        else { alert('Follow the browser flow; you’ll return to the app automatically.'); }
       } finally { btnLoginDiscord.disabled = false; await refresh(); }
     });
 
@@ -271,6 +277,7 @@
     setTimeout(() => panel.focus(), 0);
   }
 
+  // hook
   function setupAccountButton() {
     const btn = document.getElementById('btn-account');
     const mnu = document.getElementById('mnu-account');

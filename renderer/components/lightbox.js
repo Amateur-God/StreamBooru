@@ -17,16 +17,37 @@
     } catch {}
     return '';
   };
+
+  const isAndroid = () => !!(window.Platform && typeof window.Platform.isAndroid === 'function' && window.Platform.isAndroid());
+  function isHotlinkHost(u) {
+    try {
+      const h = new URL(u).hostname;
+      return (
+        h.endsWith('donmai.us') ||
+        h === 'files.yande.re' ||
+        h === 'konachan.com' || h === 'konachan.net' ||
+        h.endsWith('e621.net') || h.endsWith('e926.net') ||
+        h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
+        h.endsWith('gelbooru.com') || h.endsWith('safebooru.org') ||
+        h.endsWith('rule34.xxx') || h.endsWith('realbooru.com') || h.endsWith('xbooru.com') ||
+        h.endsWith('tbib.org') || h.endsWith('hypnohub.net')
+      );
+    } catch { return false; }
+  }
+
   const setImageWithFallback = function (img, url) {
     if (!url) return;
     img.src = url;
-    img.onerror = async () => {
+    const proxy = async () => {
       try {
         const res = await window.api.proxyImage(url);
         if (res?.ok && res.dataUrl) img.src = res.dataUrl;
       } catch (_) {}
     };
+    img.onerror = proxy;
+    if (isAndroid() && isHotlinkHost(url)) proxy();
   };
+
   const pathFromUrl = function (u) {
     try {
       const p = new URL(u).pathname;
@@ -40,7 +61,6 @@
   // Codec support detection
   function canPlayMp4H264() {
     const v = document.createElement('video');
-    // Common baseline profile string; empty string means “no”
     return !!v.canPlayType && !!v.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"');
   }
   function canPlayWebmVp9() {
@@ -88,18 +108,17 @@
       const mp4Ok = canPlayMp4H264();
       const webmOk = canPlayWebmVp9();
 
-      // If the current build can’t decode the format, show a tip and don’t try to auto-play.
       const unsupported =
         (mp4 && !mp4Ok) ||
         (webm && !webmOk) ||
-        (!mp4 && !webm && !mp4Ok && !webmOk); // unknown extension: require at least one support
+        (!mp4 && !webm && !mp4Ok && !webmOk);
 
       const vid = document.createElement('video');
       vid.className = 'lb-media';
       vid.controls = true;
       vid.autoplay = !unsupported;
       vid.loop = true;
-      vid.muted = true; // autoplay requirement
+      vid.muted = true;
       vid.playsInline = true;
       vid.preload = 'auto';
       if (post.preview_url) vid.poster = post.preview_url;
@@ -121,7 +140,6 @@
         vid.addEventListener('loadeddata', tryPlay, { once: true });
         vid.addEventListener('stalled', tryPlay);
         vid.addEventListener('suspend', tryPlay);
-        // Also trigger a play when user clicks the video area
         vid.addEventListener('click', () => {
           if (vid.paused) { tryPlay(); } else { vid.pause(); }
         });
@@ -129,7 +147,6 @@
         tipEl = makeTip('This Electron build lacks codecs for this video. Use “Open Media” to view in your browser.');
       }
 
-      // Proxy fallback only helps with headers; it can’t add codecs.
       let proxiedOnce = false;
       const setProxyAndTry = async () => {
         if (proxiedOnce) return;
