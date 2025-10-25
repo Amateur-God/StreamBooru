@@ -3,6 +3,8 @@
     if (url) window.api.openExternal(url);
   };
 
+  const isAndroid = () => !!(window.Platform && typeof window.Platform.isAndroid === 'function' && window.Platform.isAndroid());
+
   // Prefer larger sample/large image; preview last.
   const pickThumb = (post) => post.sample_url || post.file_url || post.preview_url || '';
 
@@ -42,8 +44,8 @@
     try {
       if (!window.api || typeof window.api.proxyImage !== 'function') return;
       const prox = await window.api.proxyImage(url);
-      if (prox && prox.ok && prox.url) {
-        imgEl.src = prox.url;
+      if (prox && prox.ok && (prox.url || prox.dataUrl)) {
+        imgEl.src = prox.url || prox.dataUrl;
         imgEl.removeAttribute('srcset');
       }
     } catch (e) {
@@ -113,17 +115,20 @@
     const thumbUrl = pickThumb(post);
     img.src = thumbUrl;
 
-    // srcset so the browser can pick a sharper file when available
     const candidates = [];
     if (post.sample_url) candidates.push(`${post.sample_url} 1x`);
     if (post.file_url && post.file_url !== post.sample_url) candidates.push(`${post.file_url} 2x`);
     if (candidates.length) img.srcset = candidates.join(', ');
 
-    // Fallback for hotlink/CORS
     img.addEventListener('error', () => tryProxyImage(img, thumbUrl));
 
-    // Open lightbox on true tap (not during scroll)
+    // Primary: robust pointer tap
     onTap(img, () => { if (window.openLightbox) window.openLightbox(post); });
+
+    // Android fallback: some WebViews miss pointerup on certain sites (e.g., Yande.re)
+    if (isAndroid()) {
+      img.addEventListener('click', () => { if (window.openLightbox) window.openLightbox(post); });
+    }
 
     thumb.appendChild(img);
 

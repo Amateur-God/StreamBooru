@@ -207,7 +207,7 @@
       file_url: p.file_url ? ensureHttps(p.file_url) : '',
       sample_url: p.large_file_url ? ensureHttps(p.large_file_url) : (p.preview_file_url ? ensureHttps(p.preview_file_url) : ''),
       preview_url: p.preview_file_url ? ensureHttps(p.preview_file_url) : '',
-      post_url: `${base.replace(/\/+$/,'')}/posts/${p.id}`,
+      post_url: `${base.replace(/\/+$/, '')}/posts/${p.id}`,
       site
     };
   }
@@ -225,7 +225,7 @@
       file_url: p.file_url ? ensureHttps(p.file_url) : '',
       sample_url: p.sample_url ? ensureHttps(p.sample_url) : '',
       preview_url: p.preview_url ? ensureHttps(p.preview_url) : '',
-      post_url: `${base.replace(/\/+$/,'')}/post/show/${p.id}`,
+      post_url: `${base.replace(/\/+$/, '')}/post/show/${p.id}`,
       site
     };
   }
@@ -247,7 +247,7 @@
       file_url: file ? ensureHttps(file) : '',
       sample_url: sample ? ensureHttps(sample) : '',
       preview_url: preview ? ensureHttps(preview) : '',
-      post_url: `${base.replace(/\/+$/,'')}/index.php?page=post&s=view&id=${encodeURIComponent(id)}`,
+      post_url: `${base.replace(/\/+$/, '')}/index.php?page=post&s=view&id=${encodeURIComponent(id)}`,
       site
     };
   }
@@ -263,7 +263,7 @@
     if (tags) params.set('tags', tags);
     if (page) params.set('page', String(page));
     withDanbooruAuth(params, site);
-    const url = `${baseUrl.replace(/\/+$/,'')}/posts.json?${params.toString()}`;
+    const url = `${baseUrl.replace(/\/+$/, '')}/posts.json?${params.toString()}`;
     try {
       const r = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
@@ -279,7 +279,7 @@
     if (limit) params.set('limit', String(limit));
     if (tags) params.set('tags', tags);
     if (page) params.set('page', String(page));
-    const url = `${baseUrl.replace(/\/+$/,'')}/post.json?${params.toString()}`;
+    const url = `${baseUrl.replace(/\/+$/, '')}/post.json?${params.toString()}`;
     const json = await httpGetJSON(url);
     return Array.isArray(json) ? json : [];
   }
@@ -297,7 +297,7 @@
     } catch { return []; }
   }
   async function fetchGelbooru({ baseUrl, tags, page, limit, site }) {
-    const base = baseUrl.replace(/\/+$/,'');
+    const base = baseUrl.replace(/\/+$/, '');
     const params = new URLSearchParams();
     params.set('page', 'dapi'); params.set('s', 'post'); params.set('q', 'index'); params.set('json', '1');
     if (limit) params.set('limit', String(limit));
@@ -445,6 +445,44 @@
     catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
 
+  // deep-link handler (Android)
+  function registerDeepLinkHandler() {
+    try {
+      const App = C?.Plugins?.App;
+      if (!isAndroid() || !App?.addListener) return;
+      App.addListener('appUrlOpen', async (data) => {
+        try {
+          const url = String(data?.url || '');
+          if (!url.startsWith('streambooru://')) return;
+          const u = new URL(url);
+          const token = u.searchParams.get('token') || '';
+          const linked = u.searchParams.get('linked') || '';
+          const acc = accLoad();
+          if (token) {
+            acc.token = token;
+            const base = accGetBase(acc);
+            if (base) {
+              try {
+                const me = await getMe(base, token);
+                if (me?.ok && me.user) acc.user = me.user;
+              } catch {}
+            }
+            accSave(acc);
+          } else if (linked) {
+            // Linking completed; refresh user profile on next UI open if needed
+            const base = accGetBase(acc);
+            if (base && acc.token) {
+              try {
+                const me = await getMe(base, acc.token);
+                if (me?.ok && me.user) { acc.user = me.user; accSave(acc); }
+              } catch {}
+            }
+          }
+        } catch {}
+      });
+    } catch {}
+  }
+
   // expose
   window.Platform = { isElectron, isAndroid, openExternal, share, saveImageFromUrl, getVersion, ensureStoragePermission };
 
@@ -513,15 +551,17 @@
       accountLoginDiscord: async () => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base) return { ok: false, error: 'No server selected' };
-        await openExternal(`${base}/auth/discord`);
-        return { ok: false, error: 'Discord login opens in your browser on Android. Deep-link callback not implemented yet.' };
+        const deepLink = 'streambooru://oauth/discord';
+        await openExternal(`${base}/auth/discord?redirect_uri=${encodeURIComponent(deepLink)}`);
+        return { ok: true, pending: true };
       },
       accountLinkDiscord: async () => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
         try {
-          const start = await httpGetJSON(`${base}/api/link/discord/start`, { Authorization: `Bearer ${acc.token}` });
-          if (start?.ok && start.url) { await openExternal(start.url); return { ok: true, linked: false, note: 'Complete linking in the browser, then reopen the app to refresh status.' }; }
+          const next = 'streambooru://oauth/linked';
+          const start = await httpGetJSON(`${base}/api/link/discord/start?next=${encodeURIComponent(next)}`, { Authorization: `Bearer ${acc.token}` });
+          if (start?.ok && start.url) { await openExternal(start.url); return { ok: true, pending: true }; }
           return { ok: false, error: 'Server refused link start' };
         } catch (e) { return { ok: false, error: String(e?.message || e) }; }
       },
@@ -564,5 +604,11 @@
       // Version
       getVersion
     };
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', registerDeepLinkHandler);
+  } else {
+    registerDeepLinkHandler();
   }
 })();

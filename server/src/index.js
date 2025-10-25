@@ -16,6 +16,7 @@ const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitiz
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false }));
 
 /* ---------- config ---------- */
 const PORT = Number(process.env.PORT || 3000);
@@ -54,6 +55,9 @@ function auth(req, res, next) {
 }
 function cryptoRandomId() {
   return crypto.randomBytes(16).toString('hex');
+}
+function isAllowedDeepLink(url) {
+  return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://');
 }
 
 /* ---------- per-user bus (SSE) ---------- */
@@ -117,20 +121,45 @@ app.post('/auth/local/register', async (req, res) => {
     res.status(500).json({ ok: false });
   }
 });
+
 app.post('/auth/local/login', async (req, res) => {
   try {
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
     if (!username || !password) return res.status(400).json({ ok: false, error: 'missing credentials' });
-    const r = await query('SELECT id, username, avatar, password_hash FROM users WHERE lower(username) = lower($1)', [username]);
+
+    // Robust match: username (ci) OR direct id match if someone types their id
+    const r = await query(
+      `SELECT id, username, avatar, password_hash
+       FROM users
+       WHERE lower(username) = lower($1) OR id = $1
+       LIMIT 1`,
+      [username]
+    );
     const row = r.rows[0];
-    if (!row || !row.password_hash) return res.status(401).json({ ok: false, error: 'invalid credentials' });
+    if (!row) return res.status(401).json({ ok: false, error: 'invalid credentials' });
+    if (!row.password_hash) return res.status(409).json({ ok: false, error: 'no password set' });
+
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ ok: false, error: 'invalid credentials' });
+
     const token = signToken({ id: row.id, username: row.username, avatar: row.avatar || '' });
     res.json({ ok: true, token });
   } catch (e) {
     console.error('Login error:', e?.message || e);
+    res.status(500).json({ ok: false, error: 'server error' });
+  }
+});
+
+app.post('/auth/local/set_password', auth, async (req, res) => {
+  try {
+    const password = String(req.body?.password || '');
+    if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'bad password' });
+    const hash = await bcrypt.hash(password, 12);
+    await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Set password error:', e?.message || e);
     res.status(500).json({ ok: false });
   }
 });
@@ -199,8 +228,10 @@ app.get('/auth/discord/callback', async (req, res) => {
         return res.status(409).send('This Discord is already linked to another account.');
       }
       const next = String(state.next || '');
-      if (next.startsWith('http://127.0.0.1') || next.startsWith('http://localhost')) {
-        const u = new URL(next); u.searchParams.set('linked', '1'); return res.redirect(u.toString());
+      if (isAllowedDeepLink(next)) {
+        const u = new URL(next);
+        u.searchParams.set('linked', '1');
+        return res.redirect(u.toString());
       }
       return res.status(200).send('Discord account linked. You can close this window.');
     }
@@ -219,7 +250,7 @@ app.get('/auth/discord/callback', async (req, res) => {
     const jwtToken = signToken({ id: userId, username: profile.username, avatar: profile.avatar });
 
     const next = String(state.next || '');
-    if (next.startsWith('http://127.0.0.1') || next.startsWith('http://localhost')) {
+    if (isAllowedDeepLink(next)) {
       const u = new URL(next); u.searchParams.set('token', jwtToken); return res.redirect(u.toString());
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
