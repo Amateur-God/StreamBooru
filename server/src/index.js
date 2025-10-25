@@ -9,6 +9,7 @@ const { query } = require('./db');
 const { enc, dec } = require('./crypto');
 const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitize');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 app.set('trust proxy', true);
