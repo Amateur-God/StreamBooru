@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 
+## [v1.0.2] — 2025-10-25
+
+### Added
+* **Caching** Added caching to results pages to speed up loads when changing between tabs
+* **Pre-Connects** Added preconnects so the apps can start connecting and pulling posts before the UI has loaded
+* **Concurrent Pulls** added concurrent pulls from sites to increase load speed
+
+### Changed
+* **How Posts are loaded** previously the new and popular tab would wait for all configured sites to respond, organise the posts, then display them, this caused rather slow loading at start, now they display posts as soon as they are loaded and add new ones to the end, this may however mean popular is not always in a descending order between sites and sites wont be round-robin anymore and post may appear slightly grouped by sites due to some sites responding faster than others, the same has been done for the new tab. 
+
+### Fixed
+* **Login** Login in with local account and then linking discord would overwrite local account details in db with discord making it impposible to login with local again, this has now been fixed to add discord details rather than replace and added an unlink discord button
+* **Sync issues** fixed some *rather persistent* issues where SSE wouldnt always trigger a refresh and site settings like api keys and login details wouldnt sync, also fixed some cross platform sync issues which caused issues when syncing between desktop and mobile or vice versa
+
+
 ## [v1.0.0] — 2025-10-25
 
 ### Highlights
