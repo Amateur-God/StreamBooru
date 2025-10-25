@@ -119,10 +119,12 @@
     const rowDiscord = h('div', { className: 'actions-row' });
     const btnLinkDiscord = h('button', { className: 'link-btn', text: 'Link Discord' });
     const btnLoginDiscord = h('button', { className: 'link-btn', text: 'Login with Discord' });
+    const btnUnlinkDiscord = h('button', { className: 'link-btn', text: 'Unlink Discord' });
     const btnLogout = h('button', { className: 'link-btn', text: 'Logout' });
     const linkBadge = h('span', { className: 'badge muted', text: '' });
     rowDiscord.appendChild(btnLinkDiscord);
     rowDiscord.appendChild(btnLoginDiscord);
+    rowDiscord.appendChild(btnUnlinkDiscord);
     rowDiscord.appendChild(btnLogout);
     rowDiscord.appendChild(linkBadge);
 
@@ -193,6 +195,7 @@
 
       btnLinkDiscord.disabled = !a.loggedIn || linked;
       btnLoginDiscord.disabled = !serverSelect.value || a.loggedIn;
+      btnUnlinkDiscord.disabled = !a.loggedIn || !linked;
       btnLoginLocal.disabled = !serverSelect.value || a.loggedIn;
       btnRegister.disabled = !serverSelect.value || a.loggedIn;
       btnLogout.disabled = !a.loggedIn;
@@ -250,6 +253,15 @@
           }
         }
       } finally { btnLinkDiscord.disabled = false; await refresh(); }
+    });
+
+    btnUnlinkDiscord.addEventListener('click', async () => {
+      try {
+        btnUnlinkDiscord.disabled = true;
+        const res = await window.api.accountUnlinkDiscord?.();
+        if (!res?.ok) alert('Unlink failed' + (res?.error ? `: ${res.error}` : ''));
+        else { alert('Discord unlinked.'); }
+      } finally { btnUnlinkDiscord.disabled = false; await refresh(); }
     });
 
     btnLoginDiscord.addEventListener('click', async () => {

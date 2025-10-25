@@ -26,8 +26,12 @@ const state = {
 };
 
 // ---------- utils ----------
-function siteKey(site) { return `${site.type}:${(site.baseUrl || '').replace(/\/+$/, '')}`; }
-function itemKey(p) { return `${p.site?.baseUrl || ''}#${p.id}`; }
+function normalizeBaseUrl(u) {
+  try { const url = new URL(String(u || '').trim()); url.hash = ''; url.search = ''; return url.toString().replace(/\/+$/, ''); }
+  catch { return String(u || '').replace(/\/+$/, ''); }
+}
+function siteKey(site) { return `${site.type}:${normalizeBaseUrl(site.baseUrl || '')}`; }
+function itemKey(p) { return `${normalizeBaseUrl(p.site?.baseUrl || '')}#${p.id}`; }
 function safeNum(n, d=0) { const v = Number(n); return Number.isFinite(v)?v:d; }
 function timeKey(p) {
   const t = p?.created_at ? Date.parse(p.created_at) : NaN;
@@ -240,6 +244,8 @@ async function fetchBatch() {
   state.loading = true; loadingEl.classList.remove('hidden'); loadingEl.textContent = 'Loading…';
 
   if (state.viewType === 'faves') {
+    // Auto-pull remote faves when opening the tab (Android/Web build supports it)
+    try { await window.api.syncPullFavorites?.(); } catch {}
     const all = await window.api.getLocalFavorites();
     const filtered = (all || []).filter((p)=> tagsInclude(p, state.search));
     state.items = sortItems(filtered, 'faves');
@@ -258,10 +264,11 @@ async function fetchBatch() {
   const isNew = state.viewType === 'new';
 
   const reqs = sites.map(async (site)=>{
-    const key = siteKey(site);
+    const s2 = { ...site, baseUrl: normalizeBaseUrl(site.baseUrl) };
+    const key = siteKey(s2);
     const cursor = state.cursors[key] || null;
     const res = await window.api.fetchBooru({
-      site,
+      site: s2,
       viewType: doSearch ? 'new' : state.viewType,
       cursor,
       limit: 40,
@@ -495,7 +502,15 @@ function setupSearch() {
   const btnClear = document.getElementById('tag-clear-btn');
   if (state.search) input.value = state.search;
   form.addEventListener('submit', (e)=>{ e.preventDefault(); state.search = (input.value || '').trim(); state.viewType = 'search'; setActiveTab(); clearFeed(); fetchBatch(); });
-  btnClear.addEventListener('click', ()=>{ if (!input.value && !state.search) return; input.value = ''; state.search = ''; if (state.viewType === 'search') state.viewType = 'new'; setActiveTab(); clearFeed(); fetchBatch(); });
+  btnClear.addEventListener('click', ()=>{
+    if (!input.value && !state.search) return;
+    input.value = '';
+    state.search = '';
+    if (state.viewType === 'search') state.viewType = 'new';
+    setActiveTab();
+    clearFeed();
+    fetchBatch();
+  });
 }
 function setupManageSites() {
   document.getElementById('btn-manage-sites').addEventListener('click', ()=>{
@@ -525,6 +540,28 @@ function setupInfiniteScroll() {
     if (nearBottom && !state.loading && !state.noMoreResults) fetchBatch();
   });
 }
+
+// ---------- Events: config + instant favorites ----------
+(function subscribeConfigEvents() {
+  window.events?.onConfigChanged?.(async (cfg) => {
+    if (cfg && typeof cfg === 'object') {
+      state.config = cfg || { sites: [] };
+      state.searchOrder = (state.config.sites || []).map((s)=> siteKey(s));
+      clearFeed(); fetchBatch();
+    }
+  });
+})();
+(function subscribeFavoriteEvents() {
+  window.events?.onFavoritesChanged?.(async () => {
+    try {
+      const keys = await (window.api?.getLocalFavoriteKeys?.() || []);
+      window.__localFavsSet = new Set(keys || []);
+    } catch {}
+    if (state.viewType === 'faves') {
+      clearFeed(); await fetchBatch();
+    }
+  });
+})();
 
 // ---------- Local favorites with fallback ----------
 window.isLocalFavorite = (post) => (window.__localFavsSet || new Set()).has(itemKey(post));
@@ -579,15 +616,6 @@ window.toggleLocalFavorite = async (post) => {
     return { ok: false, error: String(e?.message || e) };
   }
 };
-
-// ---------- respond to config changes ----------
-(function subscribeConfigEvents() {
-  window.events?.onConfigChanged?.(async (cfg) => {
-    state.config = cfg || { sites: [] };
-    state.searchOrder = (state.config.sites || []).map((s)=> siteKey(s));
-    clearFeed(); fetchBatch();
-  });
-})();
 
 // ---------- bootstrap ----------
 async function init() {

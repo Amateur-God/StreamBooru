@@ -296,6 +296,17 @@ app.get('/auth/discord/callback', async (req, res) => {
   }
 });
 
+/* Optional: unlink Discord so local login remains independent */
+app.post('/auth/discord/unlink', auth, async (req, res) => {
+  try {
+    await query('UPDATE users SET discord_id = NULL WHERE id = $1', [req.user.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Unlink Discord error:', e?.message || e);
+    res.status(500).json({ ok: false, error: 'server error' });
+  }
+});
+
 /* ---------- user/me ---------- */
 app.get('/api/me', auth, async (req, res) => {
   const r = await query('SELECT id, username, avatar, discord_id FROM users WHERE id = $1', [req.user.id]);
@@ -433,13 +444,28 @@ app.put('/api/sites', auth, async (req, res) => {
   }
 });
 
-/* ---------- SSE ---------- */
-app.get('/api/stream', auth, async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+/* ---------- SSE (with query token + CORS for mobile) ---------- */
+function authFromHeaderOrQuery(req) {
+  const h = req.headers.authorization || '';
+  const m = /^Bearer\s+(.+)$/.exec(h);
+  const token = m ? m[1] : (String(req.query.access_token || req.query.token || '') || '');
+  if (!token) throw new Error('missing token');
+  const decd = jwt.verify(token, JWT_SECRET);
+  return { id: decd.sub, name: decd.name || '', avatar: decd.avatar || '' };
+}
+
+app.get('/api/stream', (req, res) => {
+  // CORS for EventSource from mobile/web
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
 
-  const uid = req.user.id;
+  let user;
+  try { user = authFromHeaderOrQuery(req); }
+  catch { res.status(401).end('Unauthorized'); return; }
+
+  const uid = user.id;
   const ch = chanFor(uid);
 
   const send = (event, data) => {

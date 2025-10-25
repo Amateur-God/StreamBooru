@@ -17,6 +17,9 @@ finish-args:
 modules:
   - name: streambooru
     buildsystem: simple
+    build-options:
+      env:
+        PATH: /usr/lib/sdk/node20/bin:$PATH
     build-commands:
       - npm ci
       - npx electron-builder --linux dir --config electron-builder.yml

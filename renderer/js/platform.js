@@ -8,10 +8,26 @@
   const isAndroid = () => !!C && typeof C.getPlatform === 'function' && C.getPlatform() === 'android';
 
   // native HTTP
-  const UA = 'Mozilla/5.0 (Linux; Android 12; StreamBooru) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36';
+  const UA = 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36';
   function getHttp() { return C?.Plugins?.CapacitorHttp || C?.Plugins?.Http || null; }
   function originFrom(url) { try { return new URL(url).origin; } catch { return ''; } }
   const b64 = (s) => { try { return typeof btoa === 'function' ? btoa(s) : Buffer.from(s, 'utf8').toString('base64'); } catch { return s; } };
+
+  // Simple event bus for renderer notifications
+  const Events = (() => {
+    const map = new Map();
+    const on = (ev, fn) => { if (!map.has(ev)) map.set(ev, new Set()); map.get(ev).add(fn); };
+    const off = (ev, fn) => { map.get(ev)?.delete(fn); };
+    const emit = (ev, payload) => { (map.get(ev) || new Set()).forEach((fn)=>{ try { fn(payload); } catch {} }); };
+    return {
+      on, off, emit,
+      onFavoritesChanged: (fn) => on('favorites_changed', fn),
+      offFavoritesChanged: (fn) => off('favorites_changed', fn),
+      onConfigChanged: (fn) => on('config_changed', fn),
+      offConfigChanged: (fn) => off('config_changed', fn)
+    };
+  })();
+  window.events = window.events || Events;
 
   async function httpGetJSON(url, headers = {}) {
     const Http = getHttp();
@@ -111,13 +127,38 @@
     return { status: resp.status || 0, json };
   }
 
+  // Hotlink referer mapping for image CDNs
+  function refererFor(url) {
+    try {
+      const h = new URL(url).hostname.toLowerCase();
+      if (h.endsWith('donmai.us')) return 'https://danbooru.donmai.us';
+      if (h === 'files.yande.re') return 'https://yande.re';
+      if (h === 'konachan.com') return 'https://konachan.com';
+      if (h === 'konachan.net') return 'https://konachan.net';
+      if (h.endsWith('hypnohub.net')) return 'https://hypnohub.net';
+      if (h.endsWith('tbib.org')) return 'https://tbib.org';
+      if (h.endsWith('gelbooru.com')) return 'https://gelbooru.com';
+      if (h.endsWith('safebooru.org')) return 'https://safebooru.org';
+      if (h.endsWith('e621.net') || h.endsWith('e926.net')) return 'https://e621.net';
+      if (h.endsWith('derpicdn.net') || h.endsWith('derpibooru.org')) return 'https://derpibooru.org';
+      return '';
+    } catch { return ''; }
+  }
+
   async function httpGetBase64(url) {
     const Http = getHttp();
+    const ref = refererFor(url);
+    const headers = {
+      'User-Agent': UA,
+      ...(ref ? { Referer: ref } : {}),
+      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+    };
+
     if (isAndroid() && Http?.get) {
       const res = await Http.get({
         url,
         responseType: 'arraybuffer',
-        headers: { 'User-Agent': UA, Referer: originFrom(url) },
+        headers,
         readTimeout: 20000,
         connectTimeout: 15000
       });
@@ -125,7 +166,7 @@
       if (status < 200 || status >= 300) throw new Error(`HTTP ${status} for ${url}`);
       return String(res.data || '');
     }
-    const resp = await fetch(url);
+    const resp = await fetch(url, { headers, credentials: 'omit' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
     const buf = await (await resp.blob()).arrayBuffer();
     const bytes = new Uint8Array(buf); let bin = '';
@@ -141,6 +182,18 @@
     if (u.endsWith('.mp4')) return 'video/mp4';
     if (u.endsWith('.webm')) return 'video/webm';
     return 'image/jpeg';
+  }
+
+  // Normalize base URL for consistent favourite keys across devices
+  function normalizeBaseUrl(u) {
+    try {
+      const url = new URL(String(u || '').trim());
+      url.hash = '';
+      url.search = '';
+      return url.toString().replace(/\/+$/, '');
+    } catch {
+      return String(u || '').replace(/\/+$/, '');
+    }
   }
 
   // config (Android/Web)
@@ -185,7 +238,7 @@
     try { const u = new URL(b); return u.toString().replace(/\/+$/,''); } catch { return b.replace(/\/+$/,''); }
   }
 
-  // proxy image
+  // proxy image (with proper Referer/UA to avoid CDN 403)
   async function proxyImage(url) {
     try {
       const base64 = await httpGetBase64(url);
@@ -246,7 +299,14 @@
   // rating helpers
   function ensureHttps(url) { try { const u = new URL(url); if (u.protocol === 'http:') u.protocol = 'https:'; return u.toString(); } catch { return url; } }
   function splitTags(s) { return String(s || '').split(/\s+/).map((t) => t.trim()).filter(Boolean); }
-  function toISO(dt) { try { if (!dt) return ''; if (typeof dt === 'number') return new Date(dt * 1000).toISOString(); const d = new Date(dt); return isNaN(d.getTime()) ? '' : d.toISOString(); } catch { return ''; } }
+  function toISO(dt) {
+    try {
+      if (!dt) return '';
+      if (typeof dt === 'number') return new Date(dt * 1000).toISOString();
+      const d = new Date(dt);
+      return isNaN(d.getTime()) ? '' : d.toISOString();
+    } catch { return ''; }
+  }
   function hasRatingSpecifier(tags) { return /\brating\s*:(?:safe|questionable|explicit|any|[sqe])\b/i.test(String(tags || '')); }
   function addRatingToken(tags, ratingVal) {
     const token = ratingVal === 'questionable' ? 'rating:questionable'
@@ -325,8 +385,14 @@
 
   // per-site fetchers
   function cred(site, key) { return (site?.credentials && site.credentials[key]) || site?.[key] || ''; }
-  function withDanbooruAuth(params, site) { const login = cred(site, 'login'); const apiKey = cred(site, 'api_key'); if (login && apiKey) { params.set('login', login); params.set('api_key', apiKey); } }
-  function withGelbooruAuth(params, site) { const userId = cred(site, 'user_id'); const apiKey = cred(site, 'api_key'); if (userId && apiKey) { params.set('user_id', userId); params.set('api_key', apiKey); } }
+  function withDanbooruAuth(params, site) {
+    const login = cred(site, 'login'); const apiKey = cred(site, 'api_key');
+    if (login && apiKey) { params.set('login', login); params.set('api_key', apiKey); }
+  }
+  function withGelbooruAuth(params, site) {
+    const userId = cred(site, 'user_id'); const apiKey = cred(site, 'api_key');
+    if (userId && apiKey) { params.set('user_id', userId); params.set('api_key', apiKey); }
+  }
 
   async function fetchDanbooru({ baseUrl, tags, page, limit, site }) {
     const params = new URLSearchParams();
@@ -392,7 +458,12 @@
       } catch (e2) { throw e2; }
     }
   }
-  function popularTagFor(siteType) { if (siteType === 'danbooru') return 'order:rank'; if (siteType === 'moebooru') return 'order:score'; if (siteType === 'gelbooru') return 'sort:score'; return 'order:score'; }
+  function popularTagFor(siteType) {
+    if (siteType === 'danbooru') return 'order:rank';
+    if (siteType === 'moebooru') return 'order:score';
+    if (siteType === 'gelbooru') return 'sort:score';
+    return 'order:rank';
+  }
 
   async function fetchBooruWeb(payload) {
     const { site, viewType, cursor, limit = 40, search = '' } = payload || {};
@@ -447,7 +518,7 @@
 
   // Local + remote favorite toggle
   async function favToggle(post) {
-    const key = `${post?.site?.baseUrl || ''}#${post?.id}`;
+    const key = `${normalizeBaseUrl(post?.site?.baseUrl || '')}#${post?.id}`;
     const keys = favLoadKeys(); const map = favLoadMap();
     let favorited;
     const now = Date.now();
@@ -482,6 +553,43 @@
     catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
 
+  // SSE: auto-refresh favorites on remote changes
+  let sse = { es: null, base: '', token: '' };
+  function openSse() {
+    try {
+      const acc = accLoad(); const base = accGetBase(acc); const token = acc?.token || '';
+      if (!base || !token) return closeSse();
+      const url = `${base}/api/stream?access_token=${encodeURIComponent(token)}&t=${Date.now()}`;
+      if (sse.es && sse.base === base && sse.token === token) return;
+      closeSse();
+      const es = new EventSource(url, { withCredentials: false });
+      sse = { es, base, token };
+
+      es.addEventListener('hello', () => {});
+      es.addEventListener('ping', () => {});
+      es.addEventListener('fav_changed', async () => {
+        try {
+          const r = await window.api.syncPullFavorites?.();
+          // Refresh in-memory set so UI favourites hearts update
+          try { const keys = await favKeys(); window.__localFavsSet = new Set(keys || []); } catch {}
+          window.events?.emit?.('favorites_changed', { ok: !!r?.ok });
+        } catch {}
+      });
+      es.addEventListener('sites_changed', async () => {
+        // If you want to react to remote sites, emit a config event here
+        window.events?.emit?.('config_changed', {});
+      });
+      es.onerror = () => {
+        // backoff reconnect handled by reopening (simple)
+        setTimeout(() => { if (sse.es === es) openSse(); }, 3000);
+      };
+    } catch {}
+  }
+  function closeSse() {
+    try { sse.es?.close?.(); } catch {}
+    sse = { es: null, base: '', token: '' };
+  }
+
   function registerDeepLinkHandler() {
     try {
       const App = C?.Plugins?.App;
@@ -504,6 +612,7 @@
               } catch {}
             }
             accSave(acc);
+            openSse();
           } else if (linked) {
             const base = accGetBase(acc);
             if (base && acc.token) {
@@ -557,10 +666,13 @@
       // Account + sync (Android/Web)
       accountGet: async () => {
         const acc = accLoad();
+        // keep SSE alive if logged in
+        setTimeout(openSse, 0);
         return { serverBase: acc.serverBase || '', token: acc.token || '', user: acc.user || null, loggedIn: !!acc.token };
       },
       accountSetServer: async (base) => {
         const acc = accLoad(); acc.serverBase = String(base || '').trim(); accSave(acc);
+        openSse();
         return { ok: true, serverBase: acc.serverBase || '' };
       },
       accountRegister: async (username, password) => {
@@ -579,6 +691,7 @@
         acc.token = json.token;
         try { const me = await getMe(base, acc.token); if (me?.ok && me.user) acc.user = me.user; } catch {}
         accSave(acc);
+        openSse();
         return { ok: true, user: acc.user || null };
       },
       accountLoginLocal: async (username, password) => {
@@ -597,6 +710,7 @@
         acc.token = json.token;
         try { const me = await getMe(base, acc.token); if (me?.ok && me.user) acc.user = me.user; } catch {}
         accSave(acc);
+        openSse();
         return { ok: true, user: acc.user || null };
       },
       accountLoginDiscord: async () => {
@@ -616,7 +730,22 @@
           return { ok: false, error: 'Server refused link start' };
         } catch (e) { return { ok: false, error: String(e?.message || e) }; }
       },
-      accountLogout: async () => { const acc = accLoad(); accSave({ serverBase: acc.serverBase || '', token: '', user: null }); return { ok: true }; },
+      accountUnlinkDiscord: async () => {
+        try {
+          const acc = accLoad(); const base = accGetBase(acc);
+          if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
+          const r = await httpPostJSON(`${base}/auth/discord/unlink`, {}, { Authorization: `Bearer ${acc.token}` });
+          if ((r?.status || 0) < 400) {
+            const me = await getMe(base, acc.token);
+            if (me?.ok) { acc.user = me.user || null; accSave(acc); }
+            return { ok: true };
+          }
+          return { ok: false, error: r?.json?.error || 'Unlink failed' };
+        } catch (e) {
+          return { ok: false, error: String(e?.message || e) };
+        }
+      },
+      accountLogout: async () => { const acc = accLoad(); accSave({ serverBase: acc.serverBase || '', token: '', user: null }); closeSse(); return { ok: true }; },
 
       // Sync helpers (lightweight)
       syncOnLogin: async () => ({ ok: true }),
@@ -638,7 +767,7 @@
       sitesGetRemote: async () => {
         try {
           const acc = accLoad(); const base = accGetBase(acc);
-        if (!base || !acc.token) return { ok: true, sites: [] };
+          if (!base || !acc.token) return { ok: true, sites: [] };
           const j = await httpGetJSON(`${base}/api/sites`, { Authorization: `Bearer ${acc.token}` });
           return { ok: true, sites: Array.isArray(j?.sites) ? j.sites : [] };
         } catch { return { ok: true, sites: [] }; }
@@ -655,6 +784,9 @@
       // Version
       getVersion
     };
+
+    // Try to open SSE if already logged in
+    openSse();
   }
 
   if (document.readyState === 'loading') {
