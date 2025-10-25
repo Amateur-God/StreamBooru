@@ -46,6 +46,26 @@ function setupHotlinkHeaders(sess) {
       cb({ requestHeaders: headers });
     } catch { cb({}); }
   });
+
+  if (isDev) {
+    const filt = { urls: ['*://*/*'] };
+    sess.webRequest.onCompleted(filt, (d) => {
+      try {
+        const h = new URL(d.url).hostname;
+        if (h.includes('gelbooru') || h.includes('safebooru') || h.includes('rule34') || h.includes('realbooru') || h.includes('xbooru') || h.includes('derpibooru') || h.includes('derpicdn')) {
+          console.log('[net:onCompleted]', JSON.stringify({ url: d.url, statusCode: d.statusCode, method: d.method, fromCache: d.fromCache || false }));
+        }
+      } catch {}
+    });
+    sess.webRequest.onErrorOccurred(filt, (d) => {
+      try {
+        const h = new URL(d.url).hostname;
+        if (h.includes('gelbooru') || h.includes('safebooru') || h.includes('rule34') || h.includes('realbooru') || h.includes('xbooru') || h.includes('derpibooru') || h.includes('derpicdn')) {
+          console.warn('[net:onError]', JSON.stringify({ url: d.url, error: d.error, method: d.method }));
+        }
+      } catch {}
+    });
+  }
 }
 
 /* window */
@@ -110,33 +130,89 @@ function applyDefaultHeaders(request, url, headers = {}) {
   Object.entries(h).forEach(([k, v]) => request.setHeader(k, v));
 }
 function httpGetJson(url, headers = {}) {
+  if (isDev) console.log('[GET]', url);
   return new Promise((resolve, reject) => {
     const req = net.request({ url, method: 'GET' });
     applyDefaultHeaders(req, url, { Accept: 'application/json', ...headers });
     let data = '';
-    req.on('response', (res) => { res.on('data', (c)=> data += c); res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } }); });
+    req.on('response', (res) => {
+      const status = res.statusCode || 0;
+      res.on('data', (c)=> data += c);
+      res.on('end', () => {
+        if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\n${data.slice(0,300)}...`));
+        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      });
+    });
     req.on('error', reject); req.end();
   });
 }
-function httpPostJson(url, body, headers = {}) {
+function httpGetText(url, headers = {}) {
+  if (isDev) console.log('[GET-TEXT]', url);
+  return new Promise((resolve, reject) => {
+    const req = net.request({ url, method: 'GET' });
+    applyDefaultHeaders(req, url, headers);
+    let data = '';
+    req.on('response', (res) => {
+      const status = res.statusCode || 0;
+      res.on('data', (c)=> data += c);
+      res.on('end', () => {
+        if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\n${data.slice(0,300)}...`));
+        resolve(data);
+      });
+    });
+    req.on('error', reject); req.end();
+  });
+}
+function httpPostForm(url, form, headers = {}) {
+  if (isDev) console.log('[POST-FORM]', url);
+  return new Promise((resolve, reject) => {
+    const body = new URLSearchParams(form || {}).toString();
+    const req = net.request({ url, method: 'POST' });
+    applyDefaultHeaders(req, url, { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', ...headers });
+    let data = '';
+    req.on('response', (res) => {
+      const status = res.statusCode || 0;
+      res.on('data', (c)=> data += c);
+      res.on('end', () => {
+        if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\n${data.slice(0,300)}...`));
+        try { resolve(JSON.parse(data)); } catch { resolve({ ok: true, raw: data }); }
+      });
+    });
+    req.on('error', reject); req.write(body); req.end();
+  });
+}
+function httpPostJson(url, json, headers = {}) {
+  if (isDev) console.log('[POST-JSON]', url);
   return new Promise((resolve) => {
     const req = net.request({ url, method: 'POST' });
     applyDefaultHeaders(req, url, { 'Content-Type': 'application/json', Accept: 'application/json', ...headers });
     let data = '';
-    req.on('response', (res) => { res.on('data', (c)=> data += c); res.on('end', () => { try { resolve({ status: res.statusCode || 0, json: JSON.parse(data) }); } catch { resolve({ status: res.statusCode || 0, json: null }); } }); });
-    req.on('error', () => resolve({ status: 0, json: null })); req.write(JSON.stringify(body || {})); req.end();
+    req.on('response', (res) => {
+      const status = res.statusCode || 0;
+      res.on('data', (c)=> data += c);
+      res.on('end', () => { try { resolve({ status, json: JSON.parse(data) }); } catch { resolve({ status, json: null }); } });
+    });
+    req.on('error', () => resolve({ status: 0, json: null }));
+    req.write(JSON.stringify(json || {})); req.end();
   });
 }
-function httpPutJson(url, body, headers = {}) {
+function httpPutJson(url, json, headers = {}) {
+  if (isDev) console.log('[PUT-JSON]', url);
   return new Promise((resolve) => {
     const req = net.request({ url, method: 'PUT' });
     applyDefaultHeaders(req, url, { 'Content-Type': 'application/json', Accept: 'application/json', ...headers });
     let data = '';
-    req.on('response', (res) => { res.on('data', (c)=> data += c); res.on('end', () => { try { resolve({ status: res.statusCode || 0, json: JSON.parse(data) }); } catch { resolve({ status: res.statusCode || 0, json: null }); } }); });
-    req.on('error', () => resolve({ status: 0, json: null })); req.write(JSON.stringify(body || {})); req.end();
+    req.on('response', (res) => {
+      const status = res.statusCode || 0;
+      res.on('data', (c)=> data += c);
+      res.on('end', () => { try { resolve({ status, json: JSON.parse(data) }); } catch { resolve({ status, json: null }); } });
+    });
+    req.on('error', () => resolve({ status: 0, json: null }));
+    req.write(JSON.stringify(json || {})); req.end();
   });
 }
 function httpDelete(url, headers = {}) {
+  if (isDev) console.log('[DELETE]', url);
   return new Promise((resolve) => {
     const req = net.request({ url, method: 'DELETE' });
     applyDefaultHeaders(req, url, headers);
@@ -144,9 +220,7 @@ function httpDelete(url, headers = {}) {
     req.on('response', (res) => {
       const status = res.statusCode || 0;
       res.on('data', (c)=> data += c);
-      res.on('end', () => {
-        try { resolve({ status, json: JSON.parse(data) }); } catch { resolve({ status, json: null }); }
-      });
+      res.on('end', () => { try { resolve({ status, json: JSON.parse(data) }); } catch { resolve({ status, json: null }); } });
     });
     req.on('error', () => resolve({ status: 0, json: null })); req.end();
   });
@@ -154,21 +228,14 @@ function httpDelete(url, headers = {}) {
 
 /* adapters registry */
 const adapters = {
-  danbooru: new Danbooru(httpGetJson, null, httpDelete),
-  moebooru: new Moebooru(httpGetJson, null),
-  gelbooru: new Gelbooru(
-    httpGetJson,
-    (u,h)=>new Promise((resolve,reject)=>{
-      const r=net.request({url:u,method:'GET'}); applyDefaultHeaders(r,u,h||{}); let d='';
-      r.on('response',(res)=>{res.on('data',(c)=>d+=c); res.on('end',()=>resolve(d));});
-      r.on('error',reject); r.end();
-    })
-  ),
+  danbooru: new Danbooru(httpGetJson, httpPostForm, httpDelete),
+  moebooru: new Moebooru(httpGetJson, httpPostForm),
+  gelbooru: new Gelbooru(httpGetJson, (u,h)=>new Promise((resolve,reject)=>{const r=net.request({url:u,method:'GET'});applyDefaultHeaders(r,u,h||{});let d='';r.on('response',(res)=>{res.on('data',(c)=>d+=c);res.on('end',()=>resolve(d));});r.on('error',reject);r.end();})),
   e621: new E621(httpGetJson),
   derpibooru: new Derpibooru(httpGetJson)
 };
 
-/* account */
+/* account store */
 function readAccount() {
   if (!fs.existsSync(ACCOUNT_PATH)) {
     const def = { serverBase: 'https://streambooru.co.uk', token: '', user: null };
@@ -182,7 +249,7 @@ function writeAccount(acc) {
   fs.writeFileSync(ACCOUNT_PATH, JSON.stringify({ serverBase: base, token: acc?.token || '', user: acc?.user || null }, null, 2), 'utf-8');
 }
 
-/* SSE */
+/* SSE (optional sync) */
 let esReq = null;
 function closeEventStream() { try { esReq?.abort?.(); } catch {} esReq = null; }
 async function openEventStream() {
@@ -206,26 +273,16 @@ async function openEventStream() {
           if (ln.startsWith('event:')) ev = ln.slice(6).trim();
           else if (ln.startsWith('data:')) data += ln.slice(5).trim();
         }
-        try { const payload = data ? JSON.parse(data) : {}; await handleServerEvent(ev, payload); } catch {}
+        if (ev === 'fav_changed') { try { await pullFavoritesMerge(); } catch {} }
+        if (ev === 'sites_changed') { try { const remote = await sitesRemoteGet(); writeConfig({ sites: remote || [] }); } catch {} }
       }
     });
   });
   req.on('error', () => {});
   req.end();
 }
-async function handleServerEvent(ev, _payload) {
-  if (ev === 'fav_changed') {
-    try { await pullFavoritesMerge(); } catch {}
-  } else if (ev === 'sites_changed') {
-    try {
-      const remote = await sitesRemoteGet();
-      const cfg = { sites: remote || [] };
-      writeConfig(cfg);
-    } catch {}
-  }
-}
 
-/* remote favorites */
+/* remote favorites/sites helpers */
 async function pushFavoriteRemote(key, post, added_at) {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return { ok: false, skipped: true };
@@ -248,9 +305,7 @@ async function pullFavoritesMerge() {
   const remote = Array.isArray(j?.items) ? j.items : [];
   const local = loadFavorites();
   const byKey = new Map(local.map(x => [x.key, x]));
-  for (const it of remote) {
-    if (!byKey.has(it.key) && it.post) byKey.set(it.key, { key: it.key, added_at: Number(it.added_at) || Date.now(), post: it.post });
-  }
+  for (const it of remote) { if (!byKey.has(it.key) && it.post) byKey.set(it.key, { key: it.key, added_at: Number(it.added_at) || Date.now(), post: it.post }); }
   saveFavorites([...byKey.values()]);
   return { ok: true };
 }
@@ -262,8 +317,6 @@ async function pushAllFavorites() {
   const res = await httpPostJson(url, { items }, { Authorization: `Bearer ${acc.token}` });
   return { ok: res.status && res.status < 400 };
 }
-
-/* remote sites */
 async function sitesRemoteGet() {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return [];
@@ -278,21 +331,16 @@ async function sitesRemotePut(sites) {
   const res = await httpPutJson(url, { sites }, { Authorization: `Bearer ${acc.token}` });
   return { ok: res.status && res.status < 400 };
 }
-
-/* union on login */
 async function onLoginUnion() {
   await pushAllFavorites();
   await pullFavoritesMerge();
-
   const localCfg = readConfig();
   const localSites = Array.isArray(localCfg?.sites) ? localCfg.sites : [];
   const remoteSites = await sitesRemoteGet();
-
   const key = (s) => `${(s.type||'').toLowerCase()}|${(s.baseUrl||'').replace(/\/+$/,'')}`;
   const map = new Map();
   for (const s of remoteSites) map.set(key(s), s);
   for (const s of localSites) if (!map.has(key(s))) map.set(key(s), s);
-
   const union = Array.from(map.values()).map((s, idx)=>({ ...s, order_index: idx }));
   writeConfig({ sites: union });
   await sitesRemotePut(union);
@@ -306,6 +354,7 @@ ipcMain.handle('config:save', async (_evt, cfg) => { writeConfig(cfg); return { 
 /* IPC: fetch */
 ipcMain.handle('booru:fetch', async (_evt, payload) => {
   const { site, viewType, cursor, limit = 40, search = '' } = payload || {};
+  if (isDev) console.log('[IPC] booru:fetch', site?.type, site?.baseUrl, viewType, search);
   try {
     if (!site || !site.type || !adapters[site.type]) throw new Error(`Unsupported site type: ${site?.type}`);
     const adapter = adapters[site.type];
@@ -316,6 +365,7 @@ ipcMain.handle('booru:fetch', async (_evt, payload) => {
         : (() => { throw new Error(`Unsupported viewType: ${viewType}`); })();
     return res;
   } catch (err) {
+    if (isDev) console.error('[booru:fetch]', err);
     return { posts: [], nextCursor: cursor || null, error: String(err?.message || err) };
   }
 });
@@ -399,6 +449,16 @@ ipcMain.handle('image:proxy', async (_evt, { url }) => {
 });
 
 /* IPC: site helpers */
+ipcMain.handle('booru:favorite', async (_evt, payload) => {
+  const { site, postId, action } = payload || {};
+  if (!site || !site.type || !adapters[site.type]) return { ok: false, error: 'Unsupported site' };
+  try {
+    const adapter = adapters[site.type];
+    if (typeof adapter.favorite !== 'function') return { ok: false, error: 'Favorites not supported for this site' };
+    const result = await adapter.favorite(site, postId, action);
+    return { ok: true, result };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
 ipcMain.handle('booru:authCheck', async (_evt, payload) => {
   const { site } = payload || {};
   if (!site || !site.type || !adapters[site.type]) return { supported: false, ok: false, reason: 'Unsupported site' };
@@ -419,9 +479,7 @@ ipcMain.handle('booru:rateLimit', async (_evt, payload) => {
       const req = net.request({ url, method: 'GET' });
       applyDefaultHeaders(req, url, { Accept: 'application/json' });
       req.on('response', (res) => {
-        const headers = {}; Object.entries(res.headers || {}).forEach(([k, v]) => {
-          headers[String(k).toLowerCase()] = Array.isArray(v) ? v[0] : String(v);
-        });
+        const headers = {}; Object.entries(res.headers || {}).forEach(([k, v]) => { headers[String(k).toLowerCase()] = Array.isArray(v) ? v[0] : String(v); });
         const getH = (n) => headers[n] || headers[n.replace('ratelimit', 'rate-limit')] || null;
         const limit = Number(getH('x-ratelimit-limit')) || Number(getH('x-rate-limit-limit')) || null;
         const remaining = Number(getH('x-ratelimit-remaining')) || Number(getH('x-rate-limit-remaining')) || null;
@@ -522,13 +580,11 @@ ipcMain.handle('account:loginDiscord', async () => {
   });
   return result;
 });
-
-/* New: start Discord linking for current user and wait for callback */
 ipcMain.handle('account:linkDiscord', async () => {
   try {
     const acc = readAccount();
     if (!acc.serverBase || !acc.token) return { ok: false, error: 'Not logged in' };
-
+    const base = (acc.serverBase || '').replace(/\/+$/,'');
     const srv = http.createServer((req, res) => {
       try {
         const u = new URL(req.url, `http://${req.headers.host}`);
@@ -549,25 +605,17 @@ ipcMain.handle('account:linkDiscord', async () => {
     const port = srv.address().port;
     const next = `http://127.0.0.1:${port}/callback`;
 
-    const url = `${acc.serverBase.replace(/\/+$/,'')}/api/link/discord/start?next=${encodeURIComponent(next)}`;
-    const reqUrl = new URL(url).toString();
+    const startUrl = `${base}/api/link/discord/start?next=${encodeURIComponent(next)}`;
     const linkStart = await new Promise((resolve) => {
-      const request = net.request({ url: reqUrl, method: 'GET' });
+      const request = net.request({ url: startUrl, method: 'GET' });
       request.setHeader('Accept', 'application/json');
       request.setHeader('Authorization', `Bearer ${acc.token}`);
       let data = '';
-      request.on('response', (r) => {
-        r.on('data', (c) => data += c);
-        r.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(null); } });
-      });
+      request.on('response', (r) => { r.on('data', (c) => data += c); r.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(null); } }); });
       request.on('error', () => resolve(null));
       request.end();
     });
-
-    if (!linkStart || !linkStart.ok || !linkStart.url) {
-      try { srv.close(); } catch {}
-      return { ok: false, error: 'Server refused link start' };
-    }
+    if (!linkStart || !linkStart.ok || !linkStart.url) { try { srv.close(); } catch {} return { ok: false, error: 'Server refused link start' }; }
 
     await shell.openExternal(linkStart.url);
 
@@ -576,12 +624,17 @@ ipcMain.handle('account:linkDiscord', async () => {
       srv.on('close', () => { clearTimeout(t); resolve({ ok: true, linked: !!srv._linked }); });
     });
 
-    return result;
-  } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
-  }
-});
+    if (result.ok && result.linked) {
+      try {
+        const a = readAccount();
+        const me = await httpGetJson(`${base}/api/me`, { Authorization: `Bearer ${a.token}` });
+        if (me?.ok && me.user) { a.user = me.user; writeAccount(a); }
+      } catch {}
+    }
 
+    return { ok: true, linked: !!result.linked, user: readAccount().user || null };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
 ipcMain.handle('account:logout', async () => {
   closeEventStream();
   const acc = readAccount();
