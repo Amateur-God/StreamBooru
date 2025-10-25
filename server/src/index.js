@@ -15,9 +15,60 @@ const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitiz
 
 const app = express();
 app.set('trust proxy', true);
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: false }));
-app.use(express.text({ type: '*/*', limit: '1mb' }));
+
+/* unified body parser (1 MB limit, tolerant to mislabeled content-types) */
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') { req.body = {}; return next(); }
+
+  const max = 1024 * 1024;
+  let size = 0;
+  const chunks = [];
+
+  req.on('data', (c) => {
+    size += c.length;
+    if (size > max) {
+      req.pause();
+      res.status(413).send('Payload too large');
+      return;
+    }
+    chunks.push(c);
+  });
+
+  req.on('end', () => {
+    const raw = Buffer.concat(chunks).toString('utf8');
+    req.rawBody = raw;
+    const ct = String(req.headers['content-type'] || '').toLowerCase();
+    let obj = {};
+
+    const tryJson = () => {
+      try { obj = JSON.parse(raw); } catch { /* fallthrough */ }
+    };
+    const tryForm = () => {
+      try { obj = Object.fromEntries(new URLSearchParams(raw)); } catch { /* noop */ }
+    };
+
+    if (!raw || !raw.trim()) { req.body = {}; return next(); }
+
+    if (ct.includes('application/json')) {
+      tryJson();
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm();
+    } else if (ct.includes('application/x-www-form-urlencoded')) {
+      tryForm();
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) tryJson();
+    } else {
+      tryJson();
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm();
+    }
+
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) obj = {};
+    req.body = obj;
+    next();
+  });
+
+  req.on('error', () => next());
+});
+
+/* request log (keep) */
 app.use((req, _res, next) => { try { console.log(`${req.method} ${req.url}`); } catch {} next(); });
 
 /* ---------- config ---------- */
@@ -52,21 +103,14 @@ function auth(req, res, next) {
   }
 }
 function cryptoRandomId() { return crypto.randomBytes(16).toString('hex'); }
-function isAllowedDeepLink(url) { return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://'); }
+function isAllowedDeepLink(url) {
+  return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://');
+}
 
-/* body helpers */
+/* helpers */
 function bodyObj(req) {
-  const ct = String(req.headers['content-type'] || '').toLowerCase();
   const b = req.body;
-  if (b == null) return {};
-  if (typeof b === 'object') return b;
-  if (typeof b === 'string') {
-    const s = b.trim(); if (!s) return {};
-    if (ct.includes('json') || s.startsWith('{') || s.startsWith('[')) { try { return JSON.parse(s); } catch {} }
-    try { return Object.fromEntries(new URLSearchParams(s)); } catch {}
-    return {};
-  }
-  return {};
+  return b && typeof b === 'object' && !Array.isArray(b) ? b : {};
 }
 function extractCreds(req) {
   const b = bodyObj(req);
@@ -101,13 +145,21 @@ async function runMigrations() {
   const steps = [
     `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS password_hash TEXT`,
     `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS discord_id TEXT`,
-    `DO $$ BEGIN
-       IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_username_uniq')
-       THEN EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users((lower(username)))'; END IF;
+    `DO $$
+     BEGIN
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_username_uniq'
+       ) THEN
+         EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users((lower(username)))';
+       END IF;
      END$$;`,
-    `DO $$ BEGIN
-       IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_discord_id_uniq')
-       THEN EXECUTE 'CREATE UNIQUE INDEX users_discord_id_uniq ON users(discord_id) WHERE discord_id IS NOT NULL'; END IF;
+    `DO $$
+     BEGIN
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_discord_id_uniq'
+       ) THEN
+         EXECUTE 'CREATE UNIQUE INDEX users_discord_id_uniq ON users(discord_id) WHERE discord_id IS NOT NULL';
+       END IF;
      END$$;`
   ];
   for (const sql of steps) { try { await query(sql); } catch (e) { console.error('[migrations]', e?.message || e); } }
@@ -133,6 +185,7 @@ app.post('/auth/local/register', async (req, res) => {
     const created_at = Date.now();
     await query(`INSERT INTO users (id, username, avatar, created_at, password_hash) VALUES ($1, $2, '', $3, $4)`,
       [id, username, created_at, hash]);
+
     const token = signToken({ id, username, avatar: '' });
     res.json({ ok: true, token });
   } catch (e) {
@@ -240,10 +293,17 @@ app.get('/auth/discord/callback', async (req, res) => {
     const profile = { username: me.username || '', avatar: me.avatar || '' };
 
     if (state.purpose === 'link' && state.linkTo) {
-      try { await query('UPDATE users SET discord_id = $1, username = COALESCE(username, $2) WHERE id = $3', [discordId, profile.username, state.linkTo]); }
-      catch { return res.status(409).send('This Discord is already linked to another account.'); }
+      try {
+        await query('UPDATE users SET discord_id = $1, username = COALESCE(username, $2) WHERE id = $3', [discordId, profile.username, state.linkTo]);
+      } catch {
+        return res.status(409).send('This Discord is already linked to another account.');
+      }
       const next = String(state.next || '');
-      if (isAllowedDeepLink(next)) { const u = new URL(next); u.searchParams.set('linked', '1'); return res.redirect(u.toString()); }
+      if (isAllowedDeepLink(next)) {
+        const u = new URL(next);
+        u.searchParams.set('linked', '1');
+        return res.redirect(u.toString());
+      }
       return res.status(200).send('Discord account linked. You can close this window.');
     }
 
@@ -295,10 +355,9 @@ app.get('/api/favorites', auth, async (req, res) => {
 app.put('/api/favorites/:key', auth, async (req, res) => {
   try {
     const key = sanitizeFavoriteKey(req.params.key);
-    const b = bodyObj(req);
-    const post = clampPost(b?.post);
+    const post = clampPost(bodyObj(req)?.post);
     if (!key || !post) return res.status(400).json({ ok: false, error: 'bad key/post' });
-    const added_at = Number(b?.added_at) || Date.now();
+    const added_at = Number(bodyObj(req)?.added_at) || Date.now();
     await query(`
       INSERT INTO favorites (user_id, key, added_at, post_json)
       VALUES ($1, $2, $3, $4::jsonb)
