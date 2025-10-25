@@ -123,6 +123,10 @@ function saveFavorites(arr) {
   fs.writeFileSync(FAVORITES_PATH, JSON.stringify(arr, null, 2), 'utf-8');
   try { win?.webContents?.send?.('favorites:changed'); } catch {}
 }
+function removeLocalFavoriteKey(key) {
+  const items = loadFavorites().filter((it) => it.key !== key);
+  saveFavorites(items);
+}
 
 /* http */
 function applyDefaultHeaders(request, url, headers = {}) {
@@ -279,8 +283,20 @@ async function openEventStream() {
           if (ln.startsWith('event:')) ev = ln.slice(6).trim();
           else if (ln.startsWith('data:')) data += ln.slice(5).trim();
         }
-        if (ev === 'fav_changed') { try { await pullFavoritesMerge(); } catch {} }
-        if (ev === 'sites_changed') { try { const remote = await sitesRemoteGet(); writeConfig({ sites: remote || [] }); } catch {} }
+        if (ev === 'fav_changed') {
+          try {
+            let payload = null;
+            try { payload = JSON.parse(data || '{}'); } catch {}
+            if (payload && payload.removed && payload.key) {
+              removeLocalFavoriteKey(String(payload.key));
+            } else {
+              await pullFavoritesMerge();
+            }
+          } catch {}
+        }
+        if (ev === 'sites_changed') {
+          try { const remote = await sitesRemoteGet(); writeConfig({ sites: remote || [] }); } catch {}
+        }
       }
     });
   });
@@ -309,11 +325,15 @@ async function pullFavoritesMerge() {
   const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favorites`;
   const j = await httpGetJson(url, { Authorization: `Bearer ${acc.token}` });
   const remote = Array.isArray(j?.items) ? j.items : [];
-  const local = loadFavorites();
-  const byKey = new Map(local.map(x => [x.key, x]));
-  for (const it of remote) { if (!byKey.has(it.key) && it.post) byKey.set(it.key, { key: it.key, added_at: Number(it.added_at) || Date.now(), post: it.post }); }
-  saveFavorites([...byKey.values()]);
-  return { ok: true };
+
+  // Replace local with remote to reflect deletions immediately
+  const next = [];
+  for (const it of remote) {
+    if (!it || !it.key || !it.post) continue;
+    next.push({ key: String(it.key), added_at: Number(it.added_at) || Date.now(), post: it.post });
+  }
+  saveFavorites(next);
+  return { ok: true, count: next.length };
 }
 async function pushAllFavorites() {
   const acc = readAccount();

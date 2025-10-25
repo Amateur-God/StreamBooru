@@ -16,59 +16,30 @@ const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitiz
 const app = express();
 app.set('trust proxy', true);
 
-/* unified body parser (1 MB limit, tolerant to mislabeled content-types) */
+/* body parser (1 MB, tolerant) */
 app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD') { req.body = {}; return next(); }
-
   const max = 1024 * 1024;
-  let size = 0;
-  const chunks = [];
-
-  req.on('data', (c) => {
-    size += c.length;
-    if (size > max) {
-      req.pause();
-      res.status(413).send('Payload too large');
-      return;
-    }
-    chunks.push(c);
-  });
-
+  let size = 0; const chunks = [];
+  req.on('data', (c) => { size += c.length; if (size > max) { req.pause(); res.status(413).send('Payload too large'); return; } chunks.push(c); });
   req.on('end', () => {
     const raw = Buffer.concat(chunks).toString('utf8');
     req.rawBody = raw;
     const ct = String(req.headers['content-type'] || '').toLowerCase();
     let obj = {};
-
-    const tryJson = () => {
-      try { obj = JSON.parse(raw); } catch { /* fallthrough */ }
-    };
-    const tryForm = () => {
-      try { obj = Object.fromEntries(new URLSearchParams(raw)); } catch { /* noop */ }
-    };
-
+    const tryJson = () => { try { obj = JSON.parse(raw); } catch {} };
+    const tryForm = () => { try { obj = Object.fromEntries(new URLSearchParams(raw)); } catch {} };
     if (!raw || !raw.trim()) { req.body = {}; return next(); }
-
-    if (ct.includes('application/json')) {
-      tryJson();
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm();
-    } else if (ct.includes('application/x-www-form-urlencoded')) {
-      tryForm();
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) tryJson();
-    } else {
-      tryJson();
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm();
-    }
-
+    if (ct.includes('application/json')) { tryJson(); if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm(); }
+    else if (ct.includes('application/x-www-form-urlencoded')) { tryForm(); if (!obj || typeof obj !== 'object' || Array.isArray(obj)) tryJson(); }
+    else { tryJson(); if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).length === 0) tryForm(); }
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) obj = {};
-    req.body = obj;
-    next();
+    req.body = obj; next();
   });
-
   req.on('error', () => next());
 });
 
-/* request log (keep) */
+/* request log */
 app.use((req, _res, next) => { try { console.log(`${req.method} ${req.url}`); } catch {} next(); });
 
 /* ---------- config ---------- */
@@ -103,15 +74,10 @@ function auth(req, res, next) {
   }
 }
 function cryptoRandomId() { return crypto.randomBytes(16).toString('hex'); }
-function isAllowedDeepLink(url) {
-  return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://');
-}
+function isAllowedDeepLink(url) { return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://'); }
 
 /* helpers */
-function bodyObj(req) {
-  const b = req.body;
-  return b && typeof b === 'object' && !Array.isArray(b) ? b : {};
-}
+function bodyObj(req) { const b = req.body; return b && typeof b === 'object' && !Array.isArray(b) ? b : {}; }
 function extractCreds(req) {
   const b = bodyObj(req);
   let u = (b.username ?? req.query?.username ?? '').toString().trim();
@@ -123,12 +89,7 @@ function extractCreds(req) {
       try {
         const raw = Buffer.from(m[1], 'base64').toString('utf8');
         const idx = raw.indexOf(':');
-        if (idx >= 0) {
-          const u2 = raw.slice(0, idx);
-          const p2 = raw.slice(idx + 1);
-          if (!u) u = u2;
-          if (!p) p = p2;
-        }
+        if (idx >= 0) { const u2 = raw.slice(0, idx); const p2 = raw.slice(idx + 1); if (!u) u = u2; if (!p) p = p2; }
       } catch {}
     }
   }
@@ -342,17 +303,17 @@ app.get('/api/me', auth, async (req, res) => {
   res.json({ ok: true, user: { id: u.id, name: u.username || '', avatar: u.avatar || '', discord_id: u.discord_id || null } });
 });
 
-/* ---------- favorites ---------- */
-app.get('/api/favorites/keys', auth, async (req, res) => {
+/* ---------- favourites (primary, British) ---------- */
+app.get('/api/favourites/keys', auth, async (req, res) => {
   const r = await query('SELECT key FROM favorites WHERE user_id = $1 ORDER BY added_at DESC', [req.user.id]);
   res.json({ ok: true, keys: r.rows.map(x => x.key) });
 });
-app.get('/api/favorites', auth, async (req, res) => {
+app.get('/api/favourites', auth, async (req, res) => {
   const r = await query('SELECT key, added_at, post_json FROM favorites WHERE user_id = $1 ORDER BY added_at DESC', [req.user.id]);
   const items = r.rows.map(row => ({ key: row.key, added_at: Number(row.added_at) || 0, post: row.post_json })).filter(x => x.post);
   res.json({ ok: true, items });
 });
-app.put('/api/favorites/:key', auth, async (req, res) => {
+app.put('/api/favourites/:key', auth, async (req, res) => {
   try {
     const key = sanitizeFavoriteKey(req.params.key);
     const post = clampPost(bodyObj(req)?.post);
@@ -369,7 +330,7 @@ app.put('/api/favorites/:key', auth, async (req, res) => {
     res.status(500).json({ ok: false });
   }
 });
-app.delete('/api/favorites/:key', auth, async (req, res) => {
+app.delete('/api/favourites/:key', auth, async (req, res) => {
   try {
     const key = sanitizeFavoriteKey(req.params.key);
     if (!key) return res.status(400).json({ ok: false, error: 'bad key' });
@@ -380,7 +341,7 @@ app.delete('/api/favorites/:key', auth, async (req, res) => {
     res.status(500).json({ ok: false });
   }
 });
-app.post('/api/favorites/bulk_upsert', auth, async (req, res) => {
+app.post('/api/favourites/bulk_upsert', auth, async (req, res) => {
   try {
     const b = bodyObj(req);
     const items = Array.isArray(b.items) ? b.items : [];
@@ -408,6 +369,13 @@ app.post('/api/favorites/bulk_upsert', auth, async (req, res) => {
     res.status(500).json({ ok: false });
   }
 });
+
+/* ---------- aliases: American spelling (legacy) ---------- */
+app.get('/api/favorites', (req, res) => res.redirect(307, '/api/favourites'));
+app.get('/api/favorites/keys', (req, res) => res.redirect(307, '/api/favourites/keys'));
+app.post('/api/favorites/bulk_upsert', (req, res) => res.redirect(307, '/api/favourites/bulk_upsert'));
+app.put('/api/favorites/:key', (req, res) => res.redirect(307, `/api/favourites/${encodeURIComponent(req.params.key)}`));
+app.delete('/api/favorites/:key', (req, res) => res.redirect(307, `/api/favourites/${encodeURIComponent(req.params.key)}`));
 
 /* ---------- sites ---------- */
 app.get('/api/sites', auth, async (req, res) => {
@@ -490,7 +458,7 @@ app.get('/api/stream', auth, async (req, res) => {
   send('hello', { ok: true, ts: Date.now() });
 });
 
-/* ---------- GitHub webhook (optional deploy) ---------- */
+/* ---------- GitHub webhook ---------- */
 function verifyWebhook(req, res, next) {
   try {
     const signature = req.headers['x-hub-signature'];

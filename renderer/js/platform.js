@@ -92,6 +92,25 @@
     return { status: resp.status || 0, json };
   }
 
+  async function httpDelete(url, headers = {}) {
+    const Http = getHttp();
+    if (isAndroid() && Http?.delete) {
+      const res = await Http.delete({
+        url,
+        headers: { 'User-Agent': UA, Referer: originFrom(url), ...headers },
+        readTimeout: 15000,
+        connectTimeout: 15000
+      });
+      const status = res.status ?? 0;
+      let data = res.data;
+      if (typeof data === 'string') { try { data = JSON.parse(data); } catch {} }
+      return { status, json: data };
+    }
+    const resp = await fetch(url, { method: 'DELETE', headers: { 'User-Agent': UA, ...headers } });
+    let json = null; try { json = await resp.json(); } catch {}
+    return { status: resp.status || 0, json };
+  }
+
   async function httpGetBase64(url) {
     const Http = getHttp();
     if (isAndroid() && Http?.get) {
@@ -155,16 +174,74 @@
   function favSaveMap(map) { try { localStorage.setItem(FAV_POSTS, JSON.stringify(Object.fromEntries(map))); } catch {} }
   async function favKeys() { return [...favLoadKeys()]; }
   async function favList() { const map = favLoadMap(); const out = []; for (const v of map.values()) { try { out.push(JSON.parse(v)); } catch {} } return out; }
-  async function favToggle(post) {
-    const key = `${post?.site?.baseUrl || ''}#${post?.id}`;
-    const keys = favLoadKeys(); const map = favLoadMap();
-    let favorited;
-    if (keys.has(key)) { keys.delete(key); map.delete(key); favorited = false; }
-    else { keys.add(key); map.set(key, JSON.stringify({ ...post, _added_at: Date.now() })); favorited = true; }
-    favSaveKeys(keys); favSaveMap(map);
-    return { ok: true, favorited, key };
+
+  // account helpers for remote sync
+  const ACC_KEY = 'sb_account_v1';
+  function accLoad() { try { return JSON.parse(localStorage.getItem(ACC_KEY) || '{}'); } catch { return {}; } }
+  function accSave(obj) { try { localStorage.setItem(ACC_KEY, JSON.stringify(obj || {})); } catch {} }
+  function accGetBase(acc) {
+    const b = String(acc?.serverBase || '').trim();
+    if (!b) return '';
+    try { const u = new URL(b); return u.toString().replace(/\/+$/,''); } catch { return b.replace(/\/+$/,''); }
   }
-  async function favClear() { favSaveKeys(new Set()); favSaveMap(new Map()); return { ok: true }; }
+
+  // proxy image
+  async function proxyImage(url) {
+    try {
+      const base64 = await httpGetBase64(url);
+      const mime = guessMime(url);
+      const dataUrl = `data:${mime};base64,${base64}`;
+      return { ok: true, url: dataUrl, dataUrl };
+    } catch (e) {
+      console.error('proxyImage failed', e);
+      return { ok: false, error: String(e), url: '', dataUrl: '' };
+    }
+  }
+
+  // external/open/share/save/version/perm
+  async function fetchAsBase64(url) {
+    const resp = await fetch(url);
+    const blob = await resp.blob();
+    const buf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buf); let bin = '';
+    for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+    return b64(bin);
+  }
+  async function openExternal(url) {
+    if (isElectron() && window.api?.openExternal) return window.api.openExternal(url);
+    if (C?.Plugins?.Browser?.open) { await C.Plugins.Browser.open({ url }); return true; }
+    window.open(url, '_blank', 'noopener,noreferrer'); return true;
+  }
+  async function share(opts = {}) {
+    if (C?.Plugins?.Share?.share) { await C.Plugins.Share.share(opts); return true; }
+    if (navigator.share) { const { title, text, url } = opts; await navigator.share({ title, text, url }); return true; }
+    return false;
+  }
+  async function ensureStoragePermission() {
+    if (!isAndroid() || !C?.Plugins?.Filesystem) return true;
+    if (typeof C.Plugins.Filesystem.requestPermissions === 'function') {
+      try { const perm = await C.Plugins.Filesystem.requestPermissions(); return perm.publicStorage === 'granted' || perm.publicStorage === 'limited'; }
+      catch { return true; }
+    }
+    return true;
+  }
+  async function saveImageFromUrl(url, filename = 'image.jpg') {
+    if (isElectron() && window.api?.saveImage) return window.api.saveImage(url, filename);
+    if (C?.Plugins?.Filesystem?.writeFile) {
+      try {
+        await ensureStoragePermission();
+        const base64 = await fetchAsBase64(url);
+        await C.Plugins.Filesystem.writeFile({ path: `Pictures/StreamBooru/${filename}`, data: base64, directory: 'EXTERNAL', recursive: true });
+        return true;
+      } catch (e) { console.error('saveImageFromUrl error', e); return false; }
+    }
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.rel = 'noopener'; a.click(); return true;
+  }
+  async function getVersion() {
+    if (isElectron() && window.api?.getVersion) return window.api.getVersion();
+    if (C?.Plugins?.App?.getInfo) { try { const info = await C.Plugins.App.getInfo(); return info?.version || 'android'; } catch {} }
+    return 'web';
+  }
 
   // rating helpers
   function ensureHttps(url) { try { const u = new URL(url); if (u.protocol === 'http:') u.protocol = 'https:'; return u.toString(); } catch { return url; } }
@@ -368,79 +445,43 @@
     return { posts: norm, nextCursor };
   }
 
-  // proxy image
-  async function proxyImage(url) {
+  // Local + remote favorite toggle
+  async function favToggle(post) {
+    const key = `${post?.site?.baseUrl || ''}#${post?.id}`;
+    const keys = favLoadKeys(); const map = favLoadMap();
+    let favorited;
+    const now = Date.now();
+    if (keys.has(key)) { keys.delete(key); map.delete(key); favorited = false; }
+    else { keys.add(key); map.set(key, JSON.stringify({ ...post, _added_at: now })); favorited = true; }
+    favSaveKeys(keys); favSaveMap(map);
+
+    // Remote sync (Android/Web)
     try {
-      const base64 = await httpGetBase64(url);
-      const mime = guessMime(url);
-      const dataUrl = `data:${mime};base64,${base64}`;
-      return { ok: true, url: dataUrl, dataUrl };
+      const acc = accLoad();
+      const base = accGetBase(acc);
+      const token = acc?.token || '';
+      if (base && token) {
+        if (favorited) {
+          await httpPutJSON(`${base}/api/favorites/${encodeURIComponent(key)}`, { post, added_at: now }, { Authorization: `Bearer ${token}` });
+        } else {
+          await httpDelete(`${base}/api/favorites/${encodeURIComponent(key)}`, { Authorization: `Bearer ${token}` });
+        }
+      }
     } catch (e) {
-      console.error('proxyImage failed', e);
-      return { ok: false, error: String(e), url: '', dataUrl: '' };
+      console.warn('Remote favourite sync failed:', e?.message || e);
     }
+
+    return { ok: true, favorited, key };
   }
 
-  // external/open/share/save/version/perm
-  async function fetchAsBase64(url) {
-    const resp = await fetch(url);
-    const blob = await resp.blob();
-    const buf = await blob.arrayBuffer();
-    const bytes = new Uint8Array(buf); let bin = '';
-    for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
-  }
-  async function openExternal(url) {
-    if (isElectron() && window.api?.openExternal) return window.api.openExternal(url);
-    if (C?.Plugins?.Browser?.open) { await C.Plugins.Browser.open({ url }); return true; }
-    window.open(url, '_blank', 'noopener,noreferrer'); return true;
-  }
-  async function share(opts = {}) {
-    if (C?.Plugins?.Share?.share) { await C.Plugins.Share.share(opts); return true; }
-    if (navigator.share) { const { title, text, url } = opts; await navigator.share({ title, text, url }); return true; }
-    return false;
-  }
-  async function ensureStoragePermission() {
-    if (!isAndroid() || !C?.Plugins?.Filesystem) return true;
-    if (typeof C.Plugins.Filesystem.requestPermissions === 'function') {
-      try { const perm = await C.Plugins.Filesystem.requestPermissions(); return perm.publicStorage === 'granted' || perm.publicStorage === 'limited'; }
-      catch { return true; }
-    }
-    return true;
-  }
-  async function saveImageFromUrl(url, filename = 'image.jpg') {
-    if (isElectron() && window.api?.saveImage) return window.api.saveImage(url, filename);
-    if (C?.Plugins?.Filesystem?.writeFile) {
-      try {
-        await ensureStoragePermission();
-        const base64 = await fetchAsBase64(url);
-        await C.Plugins.Filesystem.writeFile({ path: `Pictures/StreamBooru/${filename}`, data: base64, directory: 'EXTERNAL', recursive: true });
-        return true;
-      } catch (e) { console.error('saveImageFromUrl error', e); return false; }
-    }
-    const a = document.createElement('a'); a.href = url; a.download = filename; a.rel = 'noopener'; a.click(); return true;
-  }
-  async function getVersion() {
-    if (isElectron() && window.api?.getVersion) return window.api.getVersion();
-    if (C?.Plugins?.App?.getInfo) { try { const info = await C.Plugins.App.getInfo(); return info?.version || 'android'; } catch {} }
-    return 'web';
-  }
+  async function favClear() { favSaveKeys(new Set()); favSaveMap(new Map()); return { ok: true }; }
 
   // account (Android/Web)
-  const ACC_KEY = 'sb_account_v1';
-  function accLoad() { try { return JSON.parse(localStorage.getItem(ACC_KEY) || '{}'); } catch { return {}; } }
-  function accSave(obj) { try { localStorage.setItem(ACC_KEY, JSON.stringify(obj || {})); } catch {} }
-  function accGetBase(acc) {
-    const b = String(acc?.serverBase || '').trim();
-    if (!b) return '';
-    try { const u = new URL(b); return u.toString().replace(/\/+$/,''); } catch { return b.replace(/\/+$/,''); }
-  }
   async function getMe(base, token) {
     try { return await httpGetJSON(`${base}/api/me`, { Authorization: `Bearer ${token}` }); }
     catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
 
-  // deep-link handler (Android)
   function registerDeepLinkHandler() {
     try {
       const App = C?.Plugins?.App;
@@ -503,7 +544,7 @@
       rateLimit: async () => ({ ok: true }),
       rateLimitCheck: async () => ({ ok: true }),
 
-      // Local favorites
+      // Local favorites (with remote sync on Android/Web)
       favKeys,
       favList,
       favToggle,
@@ -597,7 +638,7 @@
       sitesGetRemote: async () => {
         try {
           const acc = accLoad(); const base = accGetBase(acc);
-          if (!base || !acc.token) return { ok: true, sites: [] };
+        if (!base || !acc.token) return { ok: true, sites: [] };
           const j = await httpGetJSON(`${base}/api/sites`, { Authorization: `Bearer ${acc.token}` });
           return { ok: true, sites: Array.isArray(j?.sites) ? j.sites : [] };
         } catch { return { ok: true, sites: [] }; }

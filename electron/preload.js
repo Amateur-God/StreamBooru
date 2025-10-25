@@ -53,3 +53,18 @@ contextBridge.exposeInMainWorld('api', {
   sitesGetRemote: () => ipcRenderer.invoke('sites:getRemote'),
   sitesSaveRemote: (sites) => ipcRenderer.invoke('sites:saveRemote', sites),
 });
+
+contextBridge.exposeInMainWorld('events', {
+  onConfigChanged: (handler) => {
+    if (typeof handler !== 'function') return () => {};
+    const listener = (_evt, cfg) => handler(cfg);
+    ipcRenderer.on('config:changed', listener);
+    return () => ipcRenderer.removeListener('config:changed', listener);
+  },
+  onFavoritesChanged: (handler) => {
+    if (typeof handler !== 'function') return () => {};
+    const listener = () => handler();
+    ipcRenderer.on('favorites:changed', listener);
+    return () => ipcRenderer.removeListener('favorites:changed', listener);
+  }
+});

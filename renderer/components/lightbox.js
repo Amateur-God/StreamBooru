@@ -58,7 +58,6 @@
     }
   };
 
-  // Codec support detection
   function canPlayMp4H264() {
     const v = document.createElement('video');
     return !!v.canPlayType && !!v.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"');
@@ -81,6 +80,16 @@
   const hasRemote = (post) => typeof window.hasRemoteFavoriteSupport === 'function' && window.hasRemoteFavoriteSupport(post);
   const toggleRemote = (post) => window.toggleRemoteFavoriteRemote?.(post);
 
+  const pickFullUrl = function (post) {
+    const f = post.file_url || '';
+    const s = post.sample_url || '';
+    const p = post.preview_url || '';
+    const hot = isAndroid() && (isHotlinkHost(f) || isHotlinkHost(s));
+    const order = hot ? [s, f, p] : [f, s, p];
+    for (const u of order) if (u) return u;
+    return '';
+  };
+
   const renderForIndex = function (lb, index) {
     const items = (typeof window.getGalleryItems === 'function') ? window.getGalleryItems() : [];
     if (!items || !items[index]) return;
@@ -95,7 +104,7 @@
     closeBtn.textContent = 'Close (Esc)';
     closeBtn.addEventListener('click', () => hide(lb));
 
-    const full = post.file_url || post.sample_url || post.preview_url || '';
+    const full = pickFullUrl(post);
     const isVid = isVideoUrl(full);
 
     let mediaEl;
@@ -144,26 +153,8 @@
           if (vid.paused) { tryPlay(); } else { vid.pause(); }
         });
       } else {
-        tipEl = makeTip('This Electron build lacks codecs for this video. Use “Open Media” to view in your browser.');
+        tipEl = makeTip('This Electron/WebView cannot decode this video. Use “Open Media”.');
       }
-
-      let proxiedOnce = false;
-      const setProxyAndTry = async () => {
-        if (proxiedOnce) return;
-        proxiedOnce = true;
-        try {
-          const res = await window.api.proxyImage(full);
-          if (res?.ok && res.dataUrl) {
-            vid.pause();
-            while (vid.firstChild) vid.removeChild(vid.firstChild);
-            const s2 = document.createElement('source');
-            s2.src = res.dataUrl;
-            vid.appendChild(s2);
-            if (!unsupported) tryPlay();
-          }
-        } catch {}
-      };
-      vid.addEventListener('error', setProxyAndTry);
 
       mediaEl = vid;
     } else {
@@ -193,15 +184,11 @@
 
     const openBtn = document.createElement('button');
     openBtn.textContent = 'Open Media';
-    openBtn.addEventListener('click', () => {
-      if (full) window.api.openExternal(full);
-    });
+    openBtn.addEventListener('click', () => { if (full) window.api.openExternal(full); });
 
     const postBtn = document.createElement('button');
     postBtn.textContent = 'View Post';
-    postBtn.addEventListener('click', () => {
-      if (post.post_url) window.api.openExternal(post.post_url);
-    });
+    postBtn.addEventListener('click', () => { if (post.post_url) window.api.openExternal(post.post_url); });
 
     const dlBtn = document.createElement('button');
     dlBtn.textContent = 'Download';
@@ -213,27 +200,20 @@
         siteName: post.site?.name || post.site?.baseUrl || 'site',
         fileName: nameGuess
       });
-      if (!res?.ok && !res?.cancelled) {
-        alert('Download failed' + (res?.error ? `: ${res.error}` : ''));
-      }
+      if (!res?.ok && !res?.cancelled) { alert('Download failed' + (res?.error ? `: ${res.error}` : '')); }
     });
 
-    // Remote favorite button (when supported)
     let remoteBtn = null;
     if (hasRemote(post)) {
       remoteBtn = document.createElement('button');
-      const setTxt = (f) => { remoteBtn.textContent = f ? '♥ Favorited' : '♥ Favorite'; };
+      const setTxt = (f) => { remoteBtn.textContent = f ? '♥ Favourited' : '♥ Favourite'; };
       let fav = !!(post.user_favorited || post._remote_favorited);
       setTxt(fav);
       remoteBtn.addEventListener('click', async () => {
         remoteBtn.disabled = true;
         const res = await toggleRemote(post);
-        if (res?.ok) {
-          fav = !!res.favorited;
-          setTxt(fav);
-        } else {
-          alert('Favorite failed' + (res?.error ? `: ${res.error}` : ''));
-        }
+        if (res?.ok) { fav = !!res.favorited; setTxt(fav); }
+        else { alert('Favourite failed' + (res?.error ? `: ${res.error}` : '')); }
         remoteBtn.disabled = false;
       });
     }
@@ -269,7 +249,13 @@
     lb._keyHandler = keyHandler;
     document.addEventListener('keydown', keyHandler, true);
 
-    lb.onclick = (e) => { if (e.target === lb) hide(lb); };
+    // Overlay click to close with short guard against the same-tap synthetic click
+    const guardUntil = Date.now() + 350;
+    lb._openGuardUntil = guardUntil;
+    lb.onclick = (e) => {
+      if (Date.now() < (lb._openGuardUntil || 0)) return;
+      if (e.target === lb) hide(lb);
+    };
   };
 
   const hide = function (lb) {
@@ -285,6 +271,7 @@
     const lb = document.getElementById('lightbox');
     lb.classList.remove('hidden');
     lb.setAttribute('aria-hidden', 'false');
+    lb._openGuardUntil = Date.now() + 350;
     renderForIndex(lb, index);
   };
 

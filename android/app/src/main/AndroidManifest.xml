@@ -2,33 +2,42 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   package="com.streambooru.app">
 
+  <!-- permissions -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
   <application
     android:allowBackup="true"
     android:icon="@mipmap/ic_launcher"
     android:label="StreamBooru"
-    android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+    android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+    android:usesCleartextTraffic="true"
+    android:networkSecurityConfig="@xml/network_security_config">
+
     <activity
       android:name="com.streambooru.app.MainActivity"
       android:exported="true"
       android:launchMode="singleTask">
+
+      <!-- launcher -->
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
 
-      <!-- Deep link targets for Discord OAuth return -->
+      <!-- Deep links for OAuth return -->
       <intent-filter android:autoVerify="false">
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
-        <!-- Login deep link: streambooru://oauth/discord?token=... -->
+        <!-- streambooru://oauth/discord?token=... -->
         <data android:scheme="streambooru" android:host="oauth" android:pathPrefix="/discord" />
-        <!-- Link deep link: streambooru://oauth/linked?linked=1 -->
+        <!-- streambooru://oauth/linked?linked=1 -->
         <data android:scheme="streambooru" android:host="oauth" android:pathPrefix="/linked" />
       </intent-filter>
     </activity>
 
-    <!-- Optional: FileProvider if you later add in-app APK install or sharing -->
+    <!-- optional: FileProvider (kept safe) -->
     <provider
       android:name="androidx.core.content.FileProvider"
       android:authorities="${applicationId}.fileprovider"
@@ -38,5 +47,6 @@
         android:name="android.support.FILE_PROVIDER_PATHS"
         android:resource="@xml/file_paths" />
     </provider>
+
   </application>
 </manifest>

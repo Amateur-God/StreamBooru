@@ -20,7 +20,7 @@ body {
   padding-top: var(--topbar-h);
 }
 
-/* ========== Fixed Header (tabs + search + manage) ========== */
+/* header */
 .topbar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
   display: grid;
@@ -34,7 +34,6 @@ body {
 }
 .topbar .left { justify-self: start; }
 .topbar .center { justify-self: center; display: flex; gap: 12px; align-items: center; }
-/* Right group: keep Download All next to Manage Sites */
 .topbar .right { justify-self: end; display: flex; gap: 8px; align-items: center; }
 .topbar h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); }
 
@@ -58,7 +57,7 @@ body {
   cursor: pointer;
 }
 
-/* Search */
+/* search */
 .search { display: flex; gap: 6px; align-items: center; }
 .search input {
   width: 360px; padding: 6px 10px;
@@ -73,7 +72,7 @@ body {
 }
 .search #tag-clear-btn { width: 36px; text-align: center; }
 
-/* ========== Feed Grid / Cards ========== */
+/* grid/cards */
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -95,6 +94,14 @@ body {
   background: #0b0d12;
   overflow: hidden;
 }
+.card .thumb .hitbox {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: transparent;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
 .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card .meta {
   font-size: 12px; color: var(--muted);
@@ -103,7 +110,6 @@ body {
 }
 .card .meta .site { color: var(--accent); }
 
-/* Actions: switch to grid so 3–4 buttons wrap cleanly */
 .card .actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -123,7 +129,7 @@ body {
 .loading { text-align: center; padding: 16px; color: var(--muted); }
 .hidden { display: none; }
 
-/* ========== Modal (Manage Sites) ========== */
+/* modal */
 .modal {
   position: fixed; inset: 0;
   background: rgba(0,0,0,0.5);
@@ -162,7 +168,7 @@ body {
   background: #101425; color: var(--text); cursor: pointer;
 }
 
-/* ========== Site Manager Cards ========== */
+/* site manager */
 .site-card {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -189,7 +195,6 @@ body {
 }
 .site-card .hint { font-size: 12px; color: var(--muted); }
 
-/* Compact/tighter variant */
 .site-card.compact {
   padding: 10px;
   border-radius: 10px;
@@ -212,17 +217,13 @@ body {
   color: var(--text);
 }
 
-/* Actions row — ensure on top, and make action links look like buttons */
 .site-card .actions-row {
   position: relative;
   z-index: 2;
-  display: flex;
-  gap: 10px;
-  align-items: center;
+  display: flex; gap: 10px; align-items: center;
   flex-wrap: wrap;
 }
 
-/* “Link” buttons styled as compact buttons */
 .link-btn {
   appearance: none;
   display: inline-flex;
@@ -247,7 +248,6 @@ body {
   outline: 2px solid rgba(106,162,255,0.35);
   outline-offset: 2px;
 }
-/* Optional accent style for emphasis (e.g., Test) */
 .link-btn.accent {
   background: rgba(106,162,255,0.10);
   border-color: rgba(106,162,255,0.35);
@@ -255,7 +255,6 @@ body {
 }
 .link-btn.accent:hover { background: rgba(106,162,255,0.16); }
 
-/* Small utility buttons */
 .btn-small {
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -267,7 +266,6 @@ body {
 .btn-small.danger { border-color: #6b2a2a; }
 .add-row { margin-top: 6px; }
 
-/* Status badges */
 .badge {
   display: inline-block;
   padding: 2px 6px;
@@ -281,12 +279,11 @@ body {
 .badge.warn { color: var(--warn); border-color: rgba(247,201,72,0.35); }
 .badge.muted { color: var(--muted); }
 
-/* Legacy test-status (kept for compatibility) */
 .test-status { font-size: 12px; color: var(--muted); }
 .test-status.ok { color: var(--good); }
 .test-status.err { color: var(--bad); }
 
-/* ========== Lightbox ========== */
+/* lightbox */
 .lightbox {
   position: fixed; inset: 0;
   background: rgba(0,0,0,0.85);
@@ -322,7 +319,7 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
   border-radius: 8px; padding: 6px 10px; cursor: pointer;
 }
 
-/* ========== Download All (Topbar) ========== */
+/* Download All */
 #btn-download-all {
   appearance: none;
   padding: 8px 12px;
@@ -338,7 +335,7 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
   white-space: nowrap;
   transition: background 120ms ease, border-color 120ms ease, transform 60ms ease;
   box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 6px 16px rgba(20,30,60,0.35);
-  position: relative; /* for the “Shift for options” hint */
+  position: relative;
 }
 #btn-download-all:hover {
   border-color: rgba(106,162,255,0.85);
@@ -346,26 +343,14 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
     linear-gradient(180deg, rgba(106,162,255,0.26), rgba(106,162,255,0.14)) ,
     linear-gradient(180deg, #162752, #122041);
 }
-#btn-download-all:active {
-  transform: translateY(1px);
-  box-shadow: 0 0 0 rgba(0,0,0,0);
-}
-#btn-download-all:focus-visible {
-  outline: 2px solid rgba(106,162,255,0.45);
-  outline-offset: 2px;
-}
-#btn-download-all[disabled] {
-  opacity: 0.55;
-  cursor: default;
-  filter: saturate(0.6);
-}
-
-/* “Shift for options” hint BELOW the button */
+#btn-download-all:active { transform: translateY(1px); box-shadow: 0 0 0 rgba(0,0,0,0); }
+#btn-download-all:focus-visible { outline: 2px solid rgba(106,162,255,0.45); outline-offset: 2px; }
+#btn-download-all[disabled] { opacity: 0.55; cursor: default; filter: saturate(0.6); }
 #btn-download-all::after {
   content: 'Shift for options';
   position: absolute;
   left: 50%;
-  bottom: -28px;              /* place below the button */
+  bottom: -28px;
   transform: translate(-50%, -4px);
   padding: 2px 8px;
   font-size: 11px;
@@ -379,20 +364,13 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
   box-shadow: 0 8px 18px rgba(14,20,40,0.45);
   z-index: 10;
 }
-#btn-download-all:hover::after {
-  opacity: 0.95;
-  transform: translate(-50%, 0);
-}
-
-/* Optional visual state when options popover is open (JS may add .options-open or data-open="1") */
+#btn-download-all:hover::after { opacity: 0.95; transform: translate(-50%, 0); }
 #btn-download-all.options-open,
 #btn-download-all[data-open="1"] {
   border-color: rgba(106,162,255,0.95);
   box-shadow: 0 0 0 2px rgba(106,162,255,0.25) inset, 0 8px 18px rgba(20,30,60,0.45);
 }
 
-/* ========== Download options popover (shown on Shift/Alt‑click or right‑click) ========== */
-/* If you use the markup with id="download-options" */
 .popover {
   position: fixed;
   min-width: 360px;
@@ -406,26 +384,17 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
   z-index: 3000;
 }
 .popover.hidden { display: none !important; }
-
-/* Arrow pointing to the button */
 #download-options::before {
   content: "";
   position: absolute;
   top: -8px;
-  right: 18px; /* adjust in JS if you center elsewhere */
+  right: 18px;
   border-width: 8px;
   border-style: solid;
   border-color: transparent transparent #121524 transparent;
   filter: drop-shadow(0 -1px 0 rgba(36,41,58,0.9));
 }
-
-/* Layout inside the popover */
-.pop-row {
-  display: grid;
-  grid-template-columns: 120px 1fr;
-  gap: 8px;
-  align-items: center;
-}
+.pop-row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; align-items: center; }
 .pop-label { font-size: 12px; color: var(--muted); }
 .pop-control {
   padding: 6px 10px;
@@ -435,19 +404,9 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
   color: var(--text);
 }
 .pop-control:focus-visible { outline: 2px solid rgba(106,162,255,0.35); outline-offset: 2px; }
+.pop-hint { margin-top: 8px; font-size: 11px; color: var(--muted); line-height: 1.4; }
+.pop-actions { margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px; }
 
-.pop-hint {
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.4;
-}
-.pop-actions {
-  margin-top: 10px;
-  display: flex; justify-content: flex-end; gap: 8px;
-}
-
-/* Naming template select (if you still render it in topbar anywhere) */
 #name-template {
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -461,9 +420,7 @@ lightbox.hidden, .lightbox.hidden { display: none !important; }
 @media (max-width: 760px) {
   #btn-download-all { padding: 6px 10px; font-weight: 600; }
   #name-template { max-width: 200px; }
-  #btn-download-all::after { display: none; } /* hide hint on small screens */
+  #btn-download-all::after { display: none; }
 }
 
-.hamburger {
-  display: none;
-}
+.hamburger { display: none; }
