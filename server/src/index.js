@@ -78,53 +78,11 @@ function isAllowedDeepLink(url) { return url.startsWith('http://127.0.0.1') || u
 
 /* helpers */
 function bodyObj(req) { const b = req.body; return b && typeof b === 'object' && !Array.isArray(b) ? b : {}; }
-function extractCreds(req) {
-  const b = bodyObj(req);
-  let u = (b.username ?? req.query?.username ?? '').toString().trim();
-  let p = (b.password ?? req.query?.password ?? '').toString();
-  if (!u || !p) {
-    const h = String(req.headers.authorization || '');
-    const m = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(h);
-    if (m) {
-      try {
-        const raw = Buffer.from(m[1], 'base64').toString('utf8');
-        const idx = raw.indexOf(':');
-        if (idx >= 0) { const u2 = raw.slice(0, idx); const p2 = raw.slice(idx + 1); if (!u) u = u2; if (!p) p = p2; }
-      } catch {}
-    }
-  }
-  return { username: String(u || '').trim(), password: String(p || '') };
-}
 
 /* ---------- per-user bus (SSE) ---------- */
 const userBus = new Map();
 function chanFor(uid) { if (!userBus.has(uid)) userBus.set(uid, new EventEmitter()); return userBus.get(uid); }
 function emitTo(uid, event, payload) { try { chanFor(uid).emit('event', { event, payload, ts: Date.now() }); } catch {} }
-
-/* ---------- migrations (idempotent) ---------- */
-async function runMigrations() {
-  const steps = [
-    `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS password_hash TEXT`,
-    `ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS discord_id TEXT`,
-    `DO $$
-     BEGIN
-       IF NOT EXISTS (
-         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_username_uniq'
-       ) THEN
-         EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users((lower(username)))';
-       END IF;
-     END$$;`,
-    `DO $$
-     BEGIN
-       IF NOT EXISTS (
-         SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'users_discord_id_uniq'
-       ) THEN
-         EXECUTE 'CREATE UNIQUE INDEX users_discord_id_uniq ON users(discord_id) WHERE discord_id IS NOT NULL';
-       END IF;
-     END$$;`
-  ];
-  for (const sql of steps) { try { await query(sql); } catch (e) { console.error('[migrations]', e?.message || e); } }
-}
 
 /* ---------- health ---------- */
 app.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
@@ -157,7 +115,9 @@ app.post('/auth/local/register', async (req, res) => {
 
 app.post('/auth/local/login', async (req, res) => {
   try {
-    const { username, password } = extractCreds(req);
+    const b = bodyObj(req);
+    const username = String(b.username || req.query?.username || '').trim();
+    const password = String(b.password || req.query?.password || '');
     if (!username || !password) return res.status(400).json({ ok: false, error: 'missing credentials' });
 
     const r = await query(
@@ -182,27 +142,13 @@ app.post('/auth/local/login', async (req, res) => {
   }
 });
 
-app.post('/auth/local/set_password', auth, async (req, res) => {
-  try {
-    const b = bodyObj(req);
-    const password = String(b.password || '');
-    if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'bad password' });
-    const hash = await bcrypt.hash(password, 12);
-    await query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('Set password error:', e?.message || e);
-    res.status(500).json({ ok: false });
-  }
-});
-
 /* ---------- discord oauth (login + link) ---------- */
 app.get('/auth/discord', (req, res) => {
   const oauthRedirect = oauthRedirectBase(req);
   const next = String(req.query.redirect_uri || '').trim();
   const stateToken = jwt.sign({ purpose: 'login', next, iat: Math.floor(Date.now() / 1000) }, JWT_SECRET, { expiresIn: '10m' });
   const params = new URLSearchParams({
-    client_id: DISCORD_CLIENT_ID,
+    client_id: process.env.DISCORD_CLIENT_ID || '',
     redirect_uri: oauthRedirect,
     response_type: 'code',
     scope: 'identify',
@@ -217,7 +163,7 @@ app.get('/api/link/discord/start', auth, async (req, res) => {
     const next = String(req.query.next || '').trim();
     const stateToken = jwt.sign({ purpose: 'link', linkTo: req.user.id, next, iat: Math.floor(Date.now() / 1000) }, JWT_SECRET, { expiresIn: '10m' });
     const params = new URLSearchParams({
-      client_id: DISCORD_CLIENT_ID,
+      client_id: process.env.DISCORD_CLIENT_ID || '',
       redirect_uri: oauthRedirect,
       response_type: 'code',
       scope: 'identify',
@@ -235,12 +181,17 @@ app.get('/auth/discord/callback', async (req, res) => {
     const code = String(req.query.code || '');
     const stateRaw = String(req.query.state || '');
     if (!code) return res.status(400).send('Missing code');
+
     let state = {}; try { state = jwt.verify(stateRaw, JWT_SECRET); } catch { state = {}; }
 
     const tokRes = await fetch('https://discord.com/api/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: DISCORD_CLIENT_ID, client_secret: DISCORD_CLIENT_SECRET, grant_type: 'authorization_code', code, redirect_uri: oauthRedirect })
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: process.env.DISCORD_CLIENT_ID || '',
+        client_secret: process.env.DISCORD_CLIENT_SECRET || '',
+        grant_type: 'authorization_code',
+        code, redirect_uri: oauthRedirect
+      })
     });
     if (!tokRes.ok) return res.status(400).send('Token exchange failed');
     const tokJson = await tokRes.json();
@@ -260,7 +211,7 @@ app.get('/auth/discord/callback', async (req, res) => {
         return res.status(409).send('This Discord is already linked to another account.');
       }
       const next = String(state.next || '');
-      if (isAllowedDeepLink(next)) {
+      if (next && (next.startsWith('http://127.0.0.1') || next.startsWith('http://localhost') || next.startsWith('streambooru://'))) {
         const u = new URL(next);
         u.searchParams.set('linked', '1');
         return res.redirect(u.toString());
@@ -282,28 +233,16 @@ app.get('/auth/discord/callback', async (req, res) => {
     const jwtToken = signToken({ id: userId, username: profile.username, avatar: profile.avatar });
 
     const next = String(state.next || '');
-    if (isAllowedDeepLink(next)) { const u = new URL(next); u.searchParams.set('token', jwtToken); return res.redirect(u.toString()); }
+    if (next && (next.startsWith('http://127.0.0.1') || next.startsWith('http://localhost') || next.startsWith('streambooru://'))) {
+      const u = new URL(next);
+      u.searchParams.set('token', jwtToken);
+      return res.redirect(u.toString());
+    }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html><meta charset="utf-8" />
-<title>StreamBooru Login Success</title>
-<style>body{font-family:system-ui;margin:2rem;color:#222}code{background:#eee;padding:4px 6px;border-radius:6px}</style>
-<h2>Login successful</h2>
-<p>Copy this token into the app:</p>
-<p><code>${jwtToken}</code></p>`);
+    res.end(`<h2>Login successful</h2><p>Token:</p><pre>${jwtToken}</pre>`);
   } catch (e) {
     console.error('Discord callback error:', e?.message || e);
     res.status(500).send('Auth error');
-  }
-});
-
-/* Optional: unlink Discord so local login remains independent */
-app.post('/auth/discord/unlink', auth, async (req, res) => {
-  try {
-    await query('UPDATE users SET discord_id = NULL WHERE id = $1', [req.user.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('Unlink Discord error:', e?.message || e);
-    res.status(500).json({ ok: false, error: 'server error' });
   }
 });
 
@@ -449,6 +388,11 @@ app.post('/api/favorites/bulk_upsert', auth, async (req, res) => {
 });
 
 /* ---------- sites ---------- */
+function normBaseUrl(u) {
+  try { const url = new URL(String(u || '').trim()); url.hash = ''; url.search = ''; return url.toString().replace(/\/+$/, ''); }
+  catch { return String(u || '').replace(/\/+$/, ''); }
+}
+
 app.get('/api/sites', auth, async (req, res) => {
   const r = await query(`
     SELECT site_id, name, type, base_url, rating, tags, credentials_enc, order_index
@@ -469,12 +413,41 @@ app.get('/api/sites', auth, async (req, res) => {
   });
   res.json({ ok: true, sites });
 });
+
 app.put('/api/sites', auth, async (req, res) => {
   try {
     const listRaw = bodyObj(req)?.sites;
     const list = Array.isArray(listRaw) ? listRaw : [];
-    if (list.length > 100) return res.status(400).json({ ok: false, error: 'too many sites' });
-    const sanitized = list.map(sanitizeSiteInput).filter(s => s.type && s.base_url);
+    if (list.length > 200) return res.status(400).json({ ok: false, error: 'too many sites' });
+
+    // Explicit sanitization: accept baseUrl or base_url and preserve credentials object
+    const sanitized = list.map((s, idx) => {
+      const type = String(s.type || '').toLowerCase().slice(0, 40);
+      const base_url = normBaseUrl(s.base_url || s.baseUrl || '');
+      const name = String(s.name || '').slice(0, 200);
+      const rating = String(s.rating || 'safe').slice(0, 40);
+      const tags = String(s.tags || '').slice(0, 200);
+      const order_index = Number(s.order_index ?? idx) || idx;
+
+      const credIn = (s && typeof s.credentials === 'object' && !Array.isArray(s.credentials)) ? s.credentials : {};
+      const credentials = {};
+      if (type === 'danbooru') {
+        credentials.login = String(credIn.login || '').slice(0, 200);
+        credentials.api_key = String(credIn.api_key || '').slice(0, 400);
+      } else if (type === 'moebooru') {
+        credentials.login = String(credIn.login || '').slice(0, 200);
+        credentials.password_hash = String(credIn.password_hash || '').slice(0, 400);
+      } else {
+        // pass through primitive creds
+        Object.entries(credIn).forEach(([k,v]) => {
+          if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+            credentials[String(k).slice(0, 100)] = String(v).slice(0, 400);
+          }
+        });
+      }
+      return { name, type, base_url, rating, tags, order_index, credentials };
+    }).filter(s => s.type && s.base_url);
+
     const now = Date.now();
     const client = await pool.connect();
     try {
@@ -487,7 +460,7 @@ app.put('/api/sites', auth, async (req, res) => {
         await client.query(`
           INSERT INTO user_sites (site_id, user_id, name, type, base_url, rating, tags, credentials_enc, order_index, created_at, updated_at)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)
-        `, [site_id, req.user.id, s.name, s.type, s.base_url, s.rating, s.tags, credsEnc, i, now, now]);
+        `, [site_id, req.user.id, s.name, s.type, s.base_url, s.rating, s.tags, credsEnc, s.order_index ?? i, now, now]);
       }
       await client.query('COMMIT');
     } catch (e) {
@@ -496,15 +469,18 @@ app.put('/api/sites', auth, async (req, res) => {
         return res.status(409).json({ ok: false, error: 'duplicate site (type+baseUrl)' });
       }
       throw e;
-    } finally { client.release(); }
+    } finally {
+      client.release();
+    }
     emitTo(req.user.id, 'sites_changed', { count: sanitized.length, at: Date.now() });
     res.json({ ok: true, count: sanitized.length });
-  } catch {
+  } catch (e) {
+    console.error('sites put error', e);
     res.status(500).json({ ok: false });
   }
 });
 
-/* ---------- SSE (token via query + CORS) ---------- */
+/* ---------- SSE ---------- */
 function authFromHeaderOrQuery(req) {
   const h = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/.exec(h);
@@ -542,7 +518,7 @@ app.get('/api/stream', (req, res) => {
   send('hello', { ok: true, ts: Date.now() });
 });
 
-/* ---------- Image proxy (fallback for hotlink-protected CDNs) ---------- */
+/* ---------- Image proxy ---------- */
 function isProxyAllowed(url) {
   try {
     const u = new URL(url);
@@ -577,15 +553,12 @@ function refererFor(url) {
   } catch { return ''; }
 }
 app.get('/imgproxy', async (req, res) => {
-  // CORS for browser builds too
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Vary', 'Origin');
-
   try {
     const url = String(req.query.url || '');
     if (!url || !isProxyAllowed(url)) return res.status(400).send('Bad url');
 
-    // Optional explicit referer from client (e.g. the actual post page)
     const refParam = String(req.query.ref || '').trim();
 
     const hdr = {
@@ -595,7 +568,6 @@ app.get('/imgproxy', async (req, res) => {
 
     let refFinal = '';
     if (refParam) {
-      // Only allow referers from known sites to avoid open-proxy abuse
       try {
         const u = new URL(refParam);
         const h = u.hostname.toLowerCase();
@@ -633,7 +605,6 @@ app.get('/imgproxy', async (req, res) => {
     res.setHeader('Content-Type', ct);
     res.setHeader('Cache-Control', 'public, max-age=86400');
 
-    // Stream the image back
     r.body.pipe(res);
   } catch (e) {
     console.error('imgproxy error', e);
@@ -642,10 +613,7 @@ app.get('/imgproxy', async (req, res) => {
 });
 
 /* ---------- start ---------- */
-(async function start() {
-  try { await runMigrations(); } catch (e) { console.error('[migrations] failed:', e?.message || e); }
-  app.listen(PORT, HOST, () => {
-    const pub = STATIC_BASE_URL || `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
-    console.log(`Sync server listening on ${HOST}:${PORT} (public base: ${pub})`);
-  });
-})();
+app.listen(PORT, HOST, () => {
+  const pub = STATIC_BASE_URL || `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
+  console.log(`Sync server listening on ${HOST}:${PORT} (public base: ${pub})`);
+});

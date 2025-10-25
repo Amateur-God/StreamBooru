@@ -82,7 +82,6 @@ function createWindow() {
   setupHotlinkHeaders(win.webContents.session);
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
-  // Open DevTools automatically in dev
   if (isDev) {
     try { win.webContents.openDevTools({ mode: 'detach' }); } catch {}
   }
@@ -92,7 +91,6 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   createWindow();
 
-  // If already logged in, start SSE and refresh favourites once
   try {
     const acc = readAccount();
     if (acc?.token) {
@@ -170,23 +168,6 @@ function httpGetJson(url, headers = {}) {
       res.on('end', () => {
         if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\n${data.slice(0,300)}...`));
         try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject); req.end();
-  });
-}
-function httpGetText(url, headers = {}) {
-  if (isDev) console.log('[GET-TEXT]', url);
-  return new Promise((resolve, reject) => {
-    const req = net.request({ url, method: 'GET' });
-    applyDefaultHeaders(req, url, headers);
-    let data = '';
-    req.on('response', (res) => {
-      const status = res.statusCode || 0;
-      res.on('data', (c)=> data += c);
-      res.on('end', () => {
-        if (status >= 400) return reject(new Error(`HTTP ${status} from ${url}\n${data.slice(0,300)}...`));
-        resolve(data);
       });
     });
     req.on('error', reject); req.end();
@@ -344,7 +325,6 @@ async function openEventStream() {
 async function pushFavoriteRemote(key, post, added_at) {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return { ok: false, skipped: true };
-  // Use canonical British spelling to avoid redirects
   const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favourites/${encodeURIComponent(key)}`;
   const res = await httpPutJson(url, { post, added_at: added_at || Date.now() }, { Authorization: `Bearer ${acc.token}` });
   return { ok: res.status && res.status < 400 };
@@ -363,7 +343,6 @@ async function pullFavoritesMerge() {
   const j = await httpGetJson(url, { Authorization: `Bearer ${acc.token}` });
   const remote = Array.isArray(j?.items) ? j.items : [];
 
-  // Replace local with remote to reflect deletions immediately
   const next = [];
   for (const it of remote) {
     if (!it || !it.key || !it.post) continue;
@@ -372,14 +351,12 @@ async function pullFavoritesMerge() {
   saveFavorites(next);
   return { ok: true, count: next.length };
 }
-async function pushAllFavorites() {
-  const acc = readAccount();
-  if (!acc.serverBase || !acc.token) return { ok: false };
-  const items = loadFavorites();
-  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favourites/bulk_upsert`;
-  const res = await httpPostJson(url, { items }, { Authorization: `Bearer ${acc.token}` });
-  return { ok: res.status && res.status < 400 };
+
+function normalizeBaseUrl(u) {
+  try { const url = new URL(String(u || '').trim()); url.hash = ''; url.search = ''; return url.toString().replace(/\/+$/, ''); }
+  catch { return String(u || '').replace(/\/+$/, ''); }
 }
+
 async function sitesRemoteGet() {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return [];
@@ -390,8 +367,36 @@ async function sitesRemoteGet() {
 async function sitesRemotePut(sites) {
   const acc = readAccount();
   if (!acc.serverBase || !acc.token) return { ok: false };
+
+  // Normalize payload to server's expected shape and include credentials
+  const payloadSites = (Array.isArray(sites) ? sites : []).map((s, idx) => {
+    const base_url = normalizeBaseUrl(s.base_url || s.baseUrl || '');
+    const cred = (s && typeof s.credentials === 'object' && !Array.isArray(s.credentials)) ? s.credentials : {};
+    const out = {
+      name: String(s.name || ''),
+      type: String(s.type || '').toLowerCase(),
+      base_url,
+      rating: String(s.rating || 'safe'),
+      tags: String(s.tags || ''),
+      order_index: Number(s.order_index ?? idx) || idx,
+      credentials: {}
+    };
+    // Preserve known credential keys per site type
+    if (out.type === 'danbooru') {
+      out.credentials.login = String(cred.login || '');
+      out.credentials.api_key = String(cred.api_key || '');
+    } else if (out.type === 'moebooru') {
+      out.credentials.login = String(cred.login || '');
+      out.credentials.password_hash = String(cred.password_hash || '');
+    } else {
+      // passthrough for other site types
+      Object.entries(cred).forEach(([k,v]) => { if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') out.credentials[k] = v; });
+    }
+    return out;
+  });
+
   const url = `${acc.serverBase.replace(/\/+$/,'')}/api/sites`;
-  const res = await httpPutJson(url, { sites }, { Authorization: `Bearer ${acc.token}` });
+  const res = await httpPutJson(url, { sites: payloadSites }, { Authorization: `Bearer ${acc.token}` });
   return { ok: res.status && res.status < 400 };
 }
 async function onLoginUnion() {
@@ -400,7 +405,7 @@ async function onLoginUnion() {
   const localCfg = readConfig();
   const localSites = Array.isArray(localCfg?.sites) ? localCfg.sites : [];
   const remoteSites = await sitesRemoteGet();
-  const key = (s) => `${(s.type||'').toLowerCase()}|${(s.baseUrl||'').replace(/\/+$/,'')}`;
+  const key = (s) => `${(s.type||'').toLowerCase()}|${(s.baseUrl||s.base_url||'').replace(/\/+$/,'')}`;
   const map = new Map();
   for (const s of remoteSites) map.set(key(s), s);
   for (const s of localSites) if (!map.has(key(s))) map.set(key(s), s);
@@ -408,6 +413,14 @@ async function onLoginUnion() {
   writeConfig({ sites: union });
   await sitesRemotePut(union).catch(()=>{});
   openEventStream();
+}
+async function pushAllFavorites() {
+  const acc = readAccount();
+  if (!acc.serverBase || !acc.token) return { ok: false };
+  const items = loadFavorites();
+  const url = `${acc.serverBase.replace(/\/+$/,'')}/api/favourites/bulk_upsert`;
+  const res = await httpPostJson(url, { items }, { Authorization: `Bearer ${acc.token}` });
+  return { ok: res.status && res.status < 400 };
 }
 
 /* IPC: config */
@@ -578,7 +591,6 @@ ipcMain.handle('favorites:clear', async () => { saveFavorites([]); return { ok: 
 /* IPC: account + sync */
 ipcMain.handle('account:get', async () => {
   const acc = readAccount();
-  // Ensure SSE is open if we already have a token
   if (acc?.token) openEventStream();
   return { serverBase: acc.serverBase || DEFAULT_SERVER, token: acc.token || '', user: acc.user || null, loggedIn: !!(acc.token) };
 });

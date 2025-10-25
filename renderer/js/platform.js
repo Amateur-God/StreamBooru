@@ -577,7 +577,7 @@
   }
   async function getMe(base, token) { try { return await httpGetJSON(`${base}/api/me`, { Authorization: `Bearer ${token}` }); } catch (e) { return { ok: false, error: String(e?.message || e) }; } }
 
-  // Favourites toggle (remote + local)
+  // Favourites toggle (remote + local) — use British endpoints
   async function favToggle(post) {
     const key = `${normalizeBaseUrl(post?.site?.baseUrl || '')}#${post?.id}`;
     const keys = favLoadKeys(); const map = favLoadMap();
@@ -593,9 +593,9 @@
       const token = acc?.token || '';
       if (base && token) {
         if (favorited) {
-          await httpPutJSON(`${base}/api/favorites/${encodeURIComponent(key)}`, { post, added_at: now }, { Authorization: `Bearer ${token}` });
+          await httpPutJSON(`${base}/api/favourites/${encodeURIComponent(key)}`, { post, added_at: now }, { Authorization: `Bearer ${token}` });
         } else {
-          await httpDelete(`${base}/api/favorites/${encodeURIComponent(key)}`, { Authorization: `Bearer ${token}` });
+          await httpDelete(`${base}/api/favourites/${encodeURIComponent(key)}`, { Authorization: `Bearer ${token}` });
         }
       }
     } catch (e) {
@@ -605,11 +605,11 @@
     return { ok: true, favorited, key };
   }
 
-  // Replace local favourites from remote (authoritative)
+  // Replace local favourites from remote (authoritative) — use British endpoints
   async function syncReplaceFavorites() {
     const acc = accLoad(); const base = accGetBase(acc);
     if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
-    const data = await httpGetJSON(`${base}/api/favorites`, { Authorization: `Bearer ${acc.token}` });
+    const data = await httpGetJSON(`${base}/api/favourites`, { Authorization: `Bearer ${acc.token}` });
     const remote = Array.isArray(data?.items) ? data.items : [];
     const keys = new Set();
     const map = new Map();
@@ -621,6 +621,54 @@
     favSaveKeys(keys);
     favSaveMap(map);
     return { ok: true, count: keys.size };
+  }
+
+  // Sites sync helpers
+  function normBase(u) {
+    try { const url = new URL(String(u || '').trim()); url.hash=''; url.search=''; return url.toString().replace(/\/+$/,''); }
+    catch { return String(u || '').replace(/\/+$/,''); }
+  }
+  function buildSitesPayload(sites) {
+    return (Array.isArray(sites) ? sites : []).map((s, idx) => {
+      const base_url = normBase(s.base_url || s.baseUrl || '');
+      const credIn = (s && typeof s.credentials === 'object' && !Array.isArray(s.credentials)) ? s.credentials : {};
+      const out = {
+        name: String(s.name || ''),
+        type: String(s.type || '').toLowerCase(),
+        base_url,
+        rating: String(s.rating || 'safe'),
+        tags: String(s.tags || ''),
+        order_index: Number(s.order_index ?? idx) || idx,
+        credentials: {}
+      };
+      if (out.type === 'danbooru') {
+        out.credentials.login = String(credIn.login || '');
+        out.credentials.api_key = String(credIn.api_key || '');
+      } else if (out.type === 'moebooru') {
+        out.credentials.login = String(credIn.login || '');
+        out.credentials.password_hash = String(credIn.password_hash || '');
+      } else {
+        Object.entries(credIn).forEach(([k,v]) => {
+          if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') out.credentials[k] = v;
+        });
+      }
+      return out;
+    });
+  }
+  async function pullSitesFromServerAndSave() {
+    try {
+      const r = await api.sitesGetRemote();
+      if (r?.ok && Array.isArray(r.sites)) {
+        const cfg = await loadConfigWeb();
+        const next = { ...cfg, sites: r.sites };
+        await saveConfigWeb(next);
+        window.events?.emit?.('config_changed', next);
+        return { ok: true, count: r.sites.length };
+      }
+      return { ok: false, error: 'No sites' };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
   }
 
   // SSE with debounce to avoid storms
@@ -662,7 +710,10 @@
       es.addEventListener('hello', () => {});
       es.addEventListener('ping', () => {});
       es.addEventListener('fav_changed', () => scheduleFavSync());
-      es.addEventListener('sites_changed', () => window.events?.emit?.('config_changed', {}));
+      es.addEventListener('sites_changed', async () => {
+        // Pull fresh sites (including credentials) and update local config
+        await pullSitesFromServerAndSave();
+      });
       es.onerror = () => { setTimeout(() => { if (sse.es === es) openSse(); }, 3000); };
     } catch {}
   }
@@ -688,11 +739,14 @@
             else accSave(acc);
             openSse();
             window.events?.emitAccountChanged?.();
-          }).catch(()=>{ accSave(acc); openSse(); window.events?.emitAccountChanged?.(); });
+            // After login, pull sites + favourites
+            api.syncOnLogin?.();
+          }).catch(()=>{ accSave(acc); openSse(); window.events?.emitAccountChanged?.(); api.syncOnLogin?.(); });
         } else {
           accSave(acc);
           openSse();
           window.events?.emitAccountChanged?.();
+          api.syncOnLogin?.();
         }
       } else if (linked) {
         const base = accGetBase(acc);
@@ -773,7 +827,7 @@
   })();
 
   if (!isElectron()) {
-    window.api = {
+    const api = {
       loadConfig: loadConfigWeb,
       saveConfig: saveConfigWeb,
       fetchBooru: fetchBooruWeb,
@@ -793,6 +847,8 @@
       getLocalFavorites: favList,
       toggleLocalFavorite: favToggle,
       clearLocalFavorites: async () => { favSaveKeys(new Set()); favSaveMap(new Map()); return { ok: true }; },
+
+      // Accounts
       accountGet: async () => {
         const acc = accLoad();
         setTimeout(openSse, 0);
@@ -819,6 +875,7 @@
         accSave(acc);
         openSse();
         window.events?.emitAccountChanged?.();
+        await api.syncOnLogin();
         return { ok: true, user: acc.user || null };
       },
       accountLoginLocal: async (username, password) => {
@@ -837,6 +894,7 @@
         accSave(acc);
         openSse();
         window.events?.emitAccountChanged?.();
+        await api.syncOnLogin();
         return { ok: true, user: acc.user || null };
       },
       accountLoginDiscord: async () => {
@@ -873,8 +931,21 @@
         }
       },
       accountLogout: async () => { const acc = accLoad(); accSave({ serverBase: acc.serverBase || '', token: '', user: null }); closeSse(); window.events?.emitAccountChanged?.(); return { ok: true }; },
-      syncOnLogin: async () => ({ ok: true }),
+
+      // Sync helpers
+      syncOnLogin: async () => {
+        try {
+          await pushAllFavorites();
+          await syncReplaceFavorites();
+        } catch {}
+        // Pull sites (including credentials) and save locally
+        await pullSitesFromServerAndSave();
+        openSse();
+        return { ok: true };
+      },
       syncPullFavorites: syncReplaceFavorites,
+
+      // Sites (with credentials)
       sitesGetRemote: async () => {
         try {
           const acc = accLoad(); const base = accGetBase(acc);
@@ -887,14 +958,37 @@
         try {
           const acc = accLoad(); const base = accGetBase(acc);
           if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
-          const res = await httpPutJSON(`${base}/api/sites`, { sites: Array.isArray(sites) ? sites : [] }, { Authorization: `Bearer ${acc.token}` });
+          const payload = { sites: buildSitesPayload(sites) };
+          const res = await httpPutJSON(`${base}/api/sites`, payload, { Authorization: `Bearer ${acc.token}` });
           return { ok: res.status && res.status < 400 };
         } catch (e) { return { ok: false, error: String(e?.message || e) }; }
       },
       getVersion: window.Platform.getVersion
     };
 
+    // Local favourites bulk push
+    async function pushAllFavorites() {
+      const acc = accLoad();
+      if (!acc.serverBase || !acc.token) return { ok: false };
+      const base = accGetBase(acc);
+      const posts = await api.getLocalFavorites();
+      const items = posts.map(p => ({ key: `${normalizeBaseUrl(p?.site?.baseUrl || '')}#${p?.id}`, added_at: Number(p._added_at)||Date.now(), post: p }));
+      const r = await httpPostJSON(`${base}/api/favourites/bulk_upsert`, { items }, { Authorization: `Bearer ${acc.token}` });
+      return { ok: r.status && r.status < 400 };
+    }
+
+    window.api = Object.assign(window.api || {}, api);
+
     openSse();
+
+    // If already logged in at load, pull sites and favourites once
+    (async () => {
+      const acc = accLoad();
+      if (acc?.token && accGetBase(acc)) {
+        try { await syncReplaceFavorites(); window.events?.emit?.('favorites_changed', { source: 'startup' }); } catch {}
+        try { await pullSitesFromServerAndSave(); } catch {}
+      }
+    })();
   }
 
   document.addEventListener('visibilitychange', () => {
