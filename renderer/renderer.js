@@ -817,6 +817,13 @@ function setupInfiniteScroll() {
       const keys = await (window.api?.getLocalFavoriteKeys?.() || []);
       window.__localFavsSet = new Set(keys || []);
     } catch {}
+
+    // IMPORTANT: Invalidate the cached Favourites view so switching to it reloads fresh data
+    if (state.viewCache?.faves) {
+      state.viewCache.faves.items = [];
+      state.viewCache.faves.search = '';
+    }
+
     if (state.viewType === 'faves') {
       clearFeed(); scrollToTop(); await fetchBatch();
     }
