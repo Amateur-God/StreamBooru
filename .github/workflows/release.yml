@@ -14,7 +14,6 @@ permissions:
   contents: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   APP_ID: io.streambooru.StreamBooru
   APP_NAME: StreamBooru
 
@@ -60,7 +59,7 @@ jobs:
           cp dist/*.tar.gz release-linux/ || true
           cp dist/INSTALL.md release-linux/ || true
           ls -la release-linux
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: linux
           path: release-linux
@@ -69,7 +68,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     continue-on-error: true
     needs: prep
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v5
       - name: Setup Node
@@ -91,7 +90,7 @@ jobs:
           cp dist/*.exe release-win/ || true
           cp docs/INSTALL.md release-win/INSTALL.md || true
           ls -la release-win
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: windows
           path: release-win
@@ -134,7 +133,7 @@ jobs:
           ls -la release-flatpak
           test "$(find release-flatpak -maxdepth 1 -name '*.flatpak' | wc -l)" -gt 0
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: flatpak
           path: release-flatpak
@@ -169,7 +168,7 @@ jobs:
           npx cap sync android
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -236,7 +235,7 @@ jobs:
 
       - name: Upload APK artifact (for Release attachment)
         if: hashFiles('out-apk/*.apk') != ''
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: android-apk
           path: out-apk/*.apk
@@ -248,7 +247,7 @@ jobs:
 
       - name: Upload AAB artifact (private to Actions; not attached to Release)
         if: hashFiles('out-aab/*.aab') != ''
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: android-aab
           path: out-aab/*.aab
@@ -266,7 +265,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           path: ./artifacts
 
@@ -336,7 +335,7 @@ jobs:
 
       - name: Upload release notes (debug)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: release-notes-${{ github.ref_name }}
           path: |
@@ -348,7 +347,7 @@ jobs:
 
       - name: Create/Update GitHub Release
         if: steps.body.outputs.found == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
@@ -366,7 +365,7 @@ jobs:
 
       - name: Create/Update GitHub Release (auto-generated notes only)
         if: steps.body.outputs.found != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}

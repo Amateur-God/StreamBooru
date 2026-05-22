@@ -39,7 +39,7 @@
     const token = params.get('token');
     const linked = params.get('linked');
     const error = params.get('error');
-    const origin = location.origin;
+    const origin = location.origin.replace(/\/+$/, '');
     const KEY = 'sb_account_v1';
     const title = document.getElementById('title');
     const msg = document.getElementById('msg');
@@ -64,6 +64,32 @@
       linked: linked === '1' || linked === 'true'
     };
 
+    function saveAccount(acc) {
+      localStorage.setItem(KEY, JSON.stringify(acc));
+    }
+
+    async function persistLoginAndRedirect() {
+      let acc = {};
+      try { acc = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
+      acc.token = token;
+      if (!acc.serverBase) acc.serverBase = origin;
+
+      try {
+        const meRes = await fetch(origin + '/api/me', {
+          headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }
+        });
+        if (meRes.ok) {
+          const me = await meRes.json();
+          if (me?.ok && me.user) acc.user = me.user;
+        }
+      } catch (e) {
+        console.warn('Could not fetch account profile', e);
+      }
+
+      saveAccount(acc);
+      location.replace('/app/');
+    }
+
     // Popup flow: notify opener and close (keeps /app/ tab in front)
     if (window.opener && !window.opener.closed) {
       try {
@@ -79,12 +105,7 @@
 
     // Full-page redirect fallback (mobile / popup blocked)
     if (token) {
-      let acc = {};
-      try { acc = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
-      acc.token = token;
-      if (!acc.serverBase) acc.serverBase = origin.replace(/\/+$/, '');
-      localStorage.setItem(KEY, JSON.stringify(acc));
-      location.replace('/app/');
+      persistLoginAndRedirect();
       return;
     }
 

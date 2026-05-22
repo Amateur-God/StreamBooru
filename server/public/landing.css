@@ -130,3 +130,18 @@ html, body {
 .foot a:hover {
   text-decoration: underline;
 }
+
+.foot .linkish,
+.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
+}
+
+.foot .linkish:hover {
+  text-decoration: underline;
+}

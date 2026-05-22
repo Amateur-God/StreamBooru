@@ -1,4 +1,8 @@
 (function () {
+  const isWebHostedAnalytics = () => window.SBWebAnalytics?.enabled?.() !== false
+    && !navigator.userAgent.includes('Electron')
+    && !(window.Capacitor?.getPlatform?.() === 'android');
+
   // elements
   function h(tag, attrs = {}, children = []) {
     const el = document.createElement(tag);
@@ -110,6 +114,13 @@
 
     // local login
     const rowLocal = h('div', { className: 'fields-row' });
+    const loginAnalyticsNotice = isWebHostedAnalytics()
+      ? (() => {
+        const notice = h('p', { className: 'login-analytics-notice', hidden: '' });
+        notice.setAttribute('data-login-analytics-disclosure', '');
+        return notice;
+      })()
+      : null;
     const userInput = mkInput('Username', 'text');
     const passInput = mkInput('Password', 'password');
     const btnLoginLocal = h('button', { className: 'link-btn', text: 'Login (Local)' });
@@ -136,6 +147,7 @@
     card.appendChild(status);
     card.appendChild(serverRow);
     card.appendChild(rowRegister);
+    if (loginAnalyticsNotice) card.appendChild(loginAnalyticsNotice);
     card.appendChild(rowLocal);
     card.appendChild(rowDiscord);
     card.appendChild(rowInfo);
@@ -206,15 +218,18 @@
         await window.api.accountSetServer?.(origin || serverSelect.value);
       }
 
-      const who = a.user ? `${a.user.name || a.user.id}` : 'Not logged in';
-      status.textContent = `Server: ${serverSelect.value} • ${a.loggedIn ? 'Logged in as ' + who : 'Not logged in'}`;
+      const who = a.user ? (a.user.name || a.user.id) : null;
+      status.textContent = a.loggedIn
+        ? `Server: ${serverSelect.value} • Logged in${who ? ' as ' + who : ''}`
+        : `Server: ${serverSelect.value} • Not logged in`;
 
       const linked = !!a?.user?.discord_id;
-      linkBadge.textContent = linked ? 'Discord linked' : 'Discord not linked';
-      linkBadge.className = 'badge ' + (linked ? 'ok' : 'muted');
+      linkBadge.textContent = linked ? 'Discord linked' : (a.loggedIn ? 'Signed in' : 'Discord not linked');
+      linkBadge.className = 'badge ' + (linked ? 'ok' : (a.loggedIn ? 'ok' : 'muted'));
 
       btnLinkDiscord.disabled = !a.loggedIn || linked;
       btnLoginDiscord.disabled = !serverSelect.value || a.loggedIn;
+      btnLoginDiscord.title = a.loggedIn ? 'You are already logged in' : 'Sign in with Discord';
       btnUnlinkDiscord.disabled = !a.loggedIn || !linked;
       btnLoginLocal.disabled = !serverSelect.value || a.loggedIn;
       btnRegister.disabled = !serverSelect.value || a.loggedIn;
@@ -252,6 +267,7 @@
     btnRegister.addEventListener('click', async () => {
       try {
         btnRegister.disabled = true;
+        if (isWebHostedAnalytics()) window.SBAnalytics?.trackEvent?.('register_form_started', { form: 'account_modal' });
         const u = regUser.value.trim();
         const p = regPass.value;
         if (!u || !p) { alert('Enter username and password'); return; }
@@ -265,6 +281,7 @@
     btnLoginLocal.addEventListener('click', async () => {
       try {
         btnLoginLocal.disabled = true;
+        if (isWebHostedAnalytics()) window.SBAnalytics?.trackEvent?.('login_form_started', { form: 'account_modal' });
         const u = userInput.value.trim();
         const p = passInput.value;
         if (!u || !p) { alert('Enter username and password'); return; }
@@ -305,6 +322,7 @@
     btnLoginDiscord.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (btnLoginDiscord.disabled) return;
       btnLoginDiscord.disabled = true;
       try {
         const onWeb = typeof window !== 'undefined'
@@ -357,6 +375,11 @@
     });
 
     await refresh();
+    if (loginAnalyticsNotice) {
+      const syncLoginDisclosure = () => window.SBAnalytics?.updateLoginDisclosure?.(loginAnalyticsNotice);
+      syncLoginDisclosure();
+      window.SBConsent?.onConsentChange?.(syncLoginDisclosure);
+    }
     setTimeout(() => panel.focus(), 0);
   }
 

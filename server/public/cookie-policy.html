@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StreamBooru — Cookie Policy</title>
+  <link rel="stylesheet" href="/landing.css" />
+  <link rel="stylesheet" href="/legal.css" />
+</head>
+<body>
+  <div class="wrap legal-wrap">
+    <header class="hero">
+      <div class="logo">StreamBooru</div>
+      <p class="tagline">Cookie Policy</p>
+    </header>
+    <main class="legal">
+      <p class="legal-updated"><strong>Last updated: 22 May 2026</strong></p>
+      <p>Necessary storage keeps accounts signed in, remembers privacy choices, and supports sync. AtlasAnalytics is optional and only loads after you allow analytics. If you are signed in, your consent ID and optional choices may also be stored against your account as a consent audit record.</p>
+
+      <section class="consent-record" data-consent-record aria-labelledby="consent-record-title">
+        <div class="consent-record__header">
+          <div>
+            <h2 id="consent-record-title">Your Cookie Consent Record</h2>
+            <p data-consent-record-summary>This browser's cookie preference record will appear here when JavaScript is available.</p>
+          </div>
+          <span class="consent-record__badge" data-consent-record-analytics-status>Loading</span>
+        </div>
+        <dl class="consent-record__grid">
+          <div><dt>Consent record ID</dt><dd data-consent-record-id>Loading</dd></div>
+          <div><dt>Created</dt><dd data-consent-record-created>Loading</dd></div>
+          <div><dt>Last updated</dt><dd data-consent-record-updated>Loading</dd></div>
+          <div><dt>Policy version</dt><dd data-consent-record-version>Loading</dd></div>
+        </dl>
+        <div class="consent-record__section">
+          <h3>Analytics timeline</h3>
+          <dl class="consent-record__timestamps">
+            <div><dt>Analytics consent given</dt><dd data-consent-record-analytics-consented>Loading</dd></div>
+            <div><dt>Analytics consent withdrawn</dt><dd data-consent-record-analytics-withdrawn>Loading</dd></div>
+          </dl>
+        </div>
+        <div class="consent-record__actions">
+          <button type="button" class="cookie-consent__button cookie-consent__button--primary" data-cookie-preferences>Update choices</button>
+          <button type="button" class="cookie-consent__button" data-consent-withdraw>Withdraw optional consent</button>
+        </div>
+        <p class="legal-updated">This record is stored in your browser on this device. Another browser, device, private browsing mode, or cleared site data will have its own record.</p>
+      </section>
+
+      <h2>Technologies we use</h2>
+      <ul>
+        <li><strong>Consent preference record</strong> — stored as <code>sb_cookie_preferences_v1</code> in this browser.</li>
+        <li><strong>Account token storage</strong> — stored as <code>sb_account_v1</code> for sync login state.</li>
+        <li><strong>AtlasAnalytics</strong> — optional scripts, tags, and browser identifiers after analytics consent.</li>
+      </ul>
+      <p>See our <a href="/privacy-policy">Privacy Policy</a> and <a href="/terms">Terms and Conditions</a>.</p>
+    </main>
+    <footer class="foot">
+      <span>StreamBooru</span>
+      <nav class="foot-links">
+        <a href="/">Home</a>
+        <a href="/privacy-policy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </nav>
+    </footer>
+  </div>
+  <script src="/app/js/analytics-loader.js"></script>
+</body>
+</html>

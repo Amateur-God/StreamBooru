@@ -48,6 +48,20 @@
   function getHttp() { return C?.Plugins?.CapacitorHttp || C?.Plugins?.Http || null; }
   function originFrom(url) { try { return new URL(url).origin; } catch { return ''; } }
   const b64 = (s) => { try { return typeof btoa === 'function' ? btoa(s) : Buffer.from(s, 'utf8').toString('base64'); } catch { return s; } };
+  async function authAnalyticsPayload() {
+    if (!isWebBrowser()) return {};
+    try {
+      if (window.SBAnalytics?.getLoginPayload) return await window.SBAnalytics.getLoginPayload();
+    } catch {}
+    return {};
+  }
+  async function afterAuthAnalytics(method, token, base) {
+    if (!isWebBrowser()) return;
+    try {
+      window.SBAnalytics?.setAuthToken?.(token);
+      await window.SBAnalytics?.linkAfterAuth?.(method, token, base);
+    } catch {}
+  }
 
   // Tiny event bus used by renderer
   const Events = (() => {
@@ -98,6 +112,16 @@
     if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
     return r;
   }
+  function isSyncServerUrl(url) {
+    try {
+      const base = webProxyBase() || window.location.origin;
+      const target = new URL(url, base);
+      const server = new URL(base, window.location.origin);
+      return target.origin === server.origin;
+    } catch {
+      return false;
+    }
+  }
   async function httpGetJSON(url, headers = {}) {
     const Http = getHttp();
     if (isAndroid() && Http?.get) {
@@ -113,7 +137,7 @@
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch {} }
       return data;
     }
-    if (isWebBrowser()) {
+    if (isWebBrowser() && !isSyncServerUrl(url)) {
       try {
         const r = await fetchViaBooruProxy(url, 'application/json');
         if (r) return r.json();
@@ -139,7 +163,7 @@
       if (status < 200 || status >= 300) throw new Error(`HTTP ${status} for ${url}`);
       return String(res.data ?? '');
     }
-    if (isWebBrowser()) {
+    if (isWebBrowser() && !isSyncServerUrl(url)) {
       try {
         const r = await fetchViaBooruProxy(url, 'text/plain, application/xml, text/xml, */*');
         if (r) return r.text();
@@ -661,6 +685,36 @@
   }
   async function getMe(base, token) { try { return await httpGetJSON(`${base}/api/me`, { Authorization: `Bearer ${token}` }); } catch (e) { return { ok: false, error: String(e?.message || e) }; } }
 
+  async function hydrateAccountUser(acc, { clearOnInvalid = true } = {}) {
+    const base = accGetBase(acc);
+    const token = String(acc?.token || '').trim();
+    if (!base || !token) return acc;
+
+    const me = await getMe(base, token);
+    if (me?.ok && me.user) {
+      acc.user = me.user;
+      accSave(acc);
+      return acc;
+    }
+
+    if (clearOnInvalid && /HTTP 401\b/i.test(String(me?.error || ''))) {
+      acc.token = '';
+      acc.user = null;
+      accSave({ serverBase: acc.serverBase || '', token: '', user: null });
+      closeSse();
+    }
+    return acc;
+  }
+
+  async function clearLocalSyncedData() {
+    const cfg = await loadConfigWeb();
+    const sites = (Array.isArray(cfg.sites) ? cfg.sites : []).map((s) => ({ ...s, credentials: {} }));
+    const next = { ...cfg, sites };
+    await saveConfigWeb(next);
+    window.events?.emit?.('config_changed', next);
+    return next;
+  }
+
   // Favourites toggle (remote + local) — use British endpoints
   async function favToggle(post) {
     const key = `${normalizeBaseUrl(post?.site?.baseUrl || '')}#${post?.id}`;
@@ -818,13 +872,13 @@
     const base = accGetBase(acc);
     try {
       if (base) {
-        const me = await getMe(base, token);
-        if (me?.ok && me.user) acc.user = me.user;
+        await hydrateAccountUser(acc, { clearOnInvalid: false });
       }
     } catch {}
     accSave(acc);
     openSse();
     window.events?.emitAccountChanged?.();
+    try { await afterAuthAnalytics('discord', token, base); } catch {}
     try { await (window.api?.syncOnLogin?.()); } catch {}
   }
 
@@ -865,14 +919,14 @@
         acc.token = token;
         const base = accGetBase(acc);
         if (base) {
-          getMe(base, token).then((me) => {
+          getMe(base, token).then(async (me) => {
             if (me?.ok && me.user) { acc.user = me.user; accSave(acc); }
             else accSave(acc);
             openSse();
             window.events?.emitAccountChanged?.();
-            // After login, pull sites + favourites
+            try { await afterAuthAnalytics('discord', token, base); } catch {}
             api.syncOnLogin?.();
-          }).catch(()=>{ accSave(acc); openSse(); window.events?.emitAccountChanged?.(); api.syncOnLogin?.(); });
+          }).catch(async ()=>{ accSave(acc); openSse(); window.events?.emitAccountChanged?.(); try { await afterAuthAnalytics('discord', token, base); } catch {} api.syncOnLogin?.(); });
         } else {
           accSave(acc);
           openSse();
@@ -981,10 +1035,13 @@
 
       // Accounts
       accountGet: async () => {
-        const acc = accLoad();
+        let acc = accLoad();
         if (isWebBrowser() && !acc.serverBase) {
           const origin = defaultOriginBase();
           if (origin) { acc.serverBase = origin; accSave(acc); }
+        }
+        if (acc.token) {
+          acc = await hydrateAccountUser(acc);
         }
         setTimeout(openSse, 0);
         return { serverBase: acc.serverBase || '', token: acc.token || '', user: acc.user || null, loggedIn: !!acc.token };
@@ -997,11 +1054,12 @@
       accountRegister: async (username, password) => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base) return { ok: false, error: 'No server selected' };
+        const analytics = await authAnalyticsPayload();
 
-        let { status, json } = await httpPostJSON(`${base}/auth/local/register`, { username, password });
+        let { status, json } = await httpPostJSON(`${base}/auth/local/register`, { username, password, ...analytics });
         if (status >= 400 || !json?.token) {
           const auth = 'Basic ' + b64(`${username}:${password}`);
-          ({ status, json } = await httpPostJSON(`${base}/auth/local/register`, {}, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
+          ({ status, json } = await httpPostJSON(`${base}/auth/local/register`, { ...analytics }, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
         }
         if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Register failed' };
 
@@ -1010,17 +1068,19 @@
         accSave(acc);
         openSse();
         window.events?.emitAccountChanged?.();
+        await afterAuthAnalytics('register', acc.token, base);
         await api.syncOnLogin();
         return { ok: true, user: acc.user || null };
       },
       accountLoginLocal: async (username, password) => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base) return { ok: false, error: 'No server selected' };
+        const analytics = await authAnalyticsPayload();
 
-        let { status, json } = await httpPostJSON(`${base}/auth/local/login`, { username, password });
+        let { status, json } = await httpPostJSON(`${base}/auth/local/login`, { username, password, ...analytics });
         if (status >= 400 || !json?.token) {
           const auth = 'Basic ' + b64(`${username}:${password}`);
-          ({ status, json } = await httpPostJSON(`${base}/auth/local/login`, {}, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
+          ({ status, json } = await httpPostJSON(`${base}/auth/local/login`, { ...analytics }, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
         }
         if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Login failed' };
 
@@ -1029,6 +1089,7 @@
         accSave(acc);
         openSse();
         window.events?.emitAccountChanged?.();
+        await afterAuthAnalytics('local', acc.token, base);
         await api.syncOnLogin();
         return { ok: true, user: acc.user || null };
       },
@@ -1072,7 +1133,19 @@
           return { ok: false, error: String(e?.message || e) };
         }
       },
-      accountLogout: async () => { const acc = accLoad(); accSave({ serverBase: acc.serverBase || '', token: '', user: null }); closeSse(); window.events?.emitAccountChanged?.(); return { ok: true }; },
+      accountLogout: async () => {
+        const acc = accLoad();
+        accSave({ serverBase: acc.serverBase || '', token: '', user: null });
+        closeSse();
+        try { await clearLocalSyncedData(); } catch {}
+        try {
+          favSaveKeys(new Set());
+          favSaveMap(new Map());
+          window.events?.emit?.('favorites_changed', { ok: true, source: 'logout' });
+        } catch {}
+        window.events?.emitAccountChanged?.();
+        return { ok: true };
+      },
 
       // Sync helpers
       syncOnLogin: async () => {
@@ -1123,26 +1196,27 @@
 
     openSse();
 
-    // If already logged in at load, pull sites and favourites once
+    // If already logged in at load, hydrate account and pull sites/favourites once
     (async () => {
-      const acc = accLoad();
+      let acc = accLoad();
       if (isWebBrowser() && !acc.serverBase) {
         const origin = defaultOriginBase();
         if (origin) { acc.serverBase = origin; accSave(acc); }
       }
       if (acc?.token && accGetBase(acc)) {
-        try { await syncReplaceFavorites(); window.events?.emit?.('favorites_changed', { source: 'startup' }); } catch {}
-        try { await pullSitesFromServerAndSave(); } catch {}
+        acc = await hydrateAccountUser(acc);
+        if (acc.token) {
+          window.events?.emitAccountChanged?.();
+          try { await syncReplaceFavorites(); window.events?.emit?.('favorites_changed', { source: 'startup' }); } catch {}
+          try { await pullSitesFromServerAndSave(); } catch {}
+        }
       }
       if (isWebBrowser()) {
         try {
           const params = new URLSearchParams(window.location.search);
           if (params.get('linked') === '1') {
-            const base = accGetBase(acc);
-            if (base && acc.token) {
-              const me = await getMe(base, acc.token);
-              if (me?.ok && me.user) { acc.user = me.user; accSave(acc); window.events?.emitAccountChanged?.(); }
-            }
+            acc = await hydrateAccountUser(accLoad());
+            window.events?.emitAccountChanged?.();
             history.replaceState({}, '', window.location.pathname);
           }
         } catch {}
