@@ -24,12 +24,12 @@ const state = {
   pendingFetch: false,
   fetchGen: 0,
 
-  // Cache per tab for instant tab switching
+  // Cache per tab for instant tab switching (short TTL so feeds stay fresh)
   viewCache: {
-    new: { items: [], cursors: {}, feedSeen: new Set(), rrCursor: 0, search: '' },
-    popular: { items: [], cursors: {}, search: '' },
-    search: { items: [], cursors: {}, search: '' },
-    faves: { items: [], search: '' }
+    new: { items: [], cursors: {}, feedSeen: new Set(), rrCursor: 0, search: '', endedSites: new Set(), noMoreResults: false, cachedAt: 0, stale: false },
+    popular: { items: [], cursors: {}, search: '', endedSites: new Set(), noMoreResults: false, cachedAt: 0 },
+    search: { items: [], cursors: {}, search: '', searchBuckets: new Map(), searchSeen: new Set(), endedSites: new Set(), noMoreResults: false, cachedAt: 0 },
+    faves: { items: [], search: '', cachedAt: 0 }
   },
 
   // While scrolling, lock ordering to avoid moving items above you
@@ -349,6 +349,53 @@ function renderReplaceNoPreserve() {
 window.getGalleryItems = () => state.items;
 
 // --------- caching current view (for instant tab switching) ----------
+const VIEW_CACHE_TTL_MS = {
+  new: 2 * 60 * 1000,     // 2 min — backup expiry; manual refresh clears sooner
+  popular: 30 * 1000,     // 30 sec — popular shifts faster
+  search: 3 * 60 * 1000   // 3 min — explicit query, less volatile
+};
+
+function viewCacheTtl(viewType) {
+  return VIEW_CACHE_TTL_MS[viewType] ?? 0;
+}
+
+function invalidateViewCache(viewType) {
+  const c = state.viewCache[viewType];
+  if (!c) return;
+  c.items = [];
+  c.cursors = {};
+  c.search = '';
+  c.cachedAt = 0;
+  c.stale = true;
+  c.endedSites = new Set();
+  c.noMoreResults = false;
+  if (viewType === 'new') {
+    c.feedSeen = new Set();
+    c.rrCursor = 0;
+  }
+  if (viewType === 'search') {
+    c.searchBuckets = new Map();
+    c.searchSeen = new Set();
+  }
+}
+
+function isViewCacheFresh(viewType) {
+  const c = state.viewCache[viewType];
+  if (!c?.items?.length || c.stale) return false;
+  if (!c.cachedAt) return false;
+  const ttl = viewCacheTtl(viewType);
+  if (ttl <= 0) return true;
+  return (Date.now() - c.cachedAt) < ttl;
+}
+
+function refreshView(viewType) {
+  invalidateViewCache(viewType);
+  if (state.viewType !== viewType) return;
+  clearFeed();
+  scrollToTop();
+  fetchBatch();
+}
+
 function saveViewCache() {
   const v = state.viewType;
   const c = state.viewCache[v];
@@ -356,20 +403,39 @@ function saveViewCache() {
   c.items = [...state.items];
   c.cursors = { ...state.cursors };
   c.search = state.search;
+  c.endedSites = new Set(state.endedSites);
+  c.noMoreResults = state.noMoreResults;
+  c.cachedAt = Date.now();
+  c.stale = false;
   if (v === 'new') {
     c.feedSeen = new Set(state.feedSeen);
     c.rrCursor = state.rrCursor;
   }
+  if (v === 'search') {
+    c.searchBuckets = new Map(state.searchBuckets);
+    c.searchSeen = new Set(state.searchSeen);
+  }
 }
 function restoreViewCache({ preserveScroll = true } = {}) {
-  const c = state.viewCache[state.viewType];
+  const v = state.viewType;
+  const c = state.viewCache[v];
   if (!c) return false;
+  if (!isViewCacheFresh(v)) {
+    invalidateViewCache(v);
+    return false;
+  }
   state.items = [...(c.items || [])];
   state.cursors = { ...(c.cursors || {}) };
   state.search = c.search || '';
-  if (state.viewType === 'new') {
+  state.endedSites = new Set(c.endedSites || []);
+  state.noMoreResults = !!c.noMoreResults;
+  if (v === 'new') {
     state.feedSeen = new Set(c.feedSeen || []);
     state.rrCursor = c.rrCursor || 0;
+  }
+  if (v === 'search') {
+    state.searchBuckets = new Map(c.searchBuckets || []);
+    state.searchSeen = new Set(c.searchSeen || []);
   }
   if (state.items.length) {
     if (preserveScroll) {
@@ -662,22 +728,20 @@ function safeSetupDownloadAll() {
 // ---------- Tabs/Search/Manage/Scroll ----------
 function setupTabs() {
   document.getElementById('tab-new').addEventListener('click', ()=>{
-    if (state.viewType !== 'new') {
-      saveViewCache();
-      state.viewType = 'new';
-      setActiveTab();
-      if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
-      else { scrollToTop(); }
-    }
+    if (state.viewType === 'new') { refreshView('new'); return; }
+    saveViewCache();
+    state.viewType = 'new';
+    setActiveTab();
+    if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
+    else { scrollToTop(); }
   });
   document.getElementById('tab-popular').addEventListener('click', ()=>{
-    if (state.viewType !== 'popular') {
-      saveViewCache();
-      state.viewType = 'popular';
-      setActiveTab();
-      if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
-      else { scrollToTop(); }
-    }
+    if (state.viewType === 'popular') { refreshView('popular'); return; }
+    saveViewCache();
+    state.viewType = 'popular';
+    setActiveTab();
+    if (!restoreViewCache({ preserveScroll: false })) { clearFeed(); scrollToTop(); fetchBatch(); }
+    else { scrollToTop(); }
   });
   document.getElementById('tab-search').addEventListener('click', ()=>{
     if (state.viewType !== 'search') {
@@ -708,6 +772,7 @@ async function loadConfig() {
   state.searchOrder = (state.config.sites || []).map((s)=>siteKey(s));
 }
 function clearFeed() {
+  invalidateViewCache(state.viewType);
   state.items = [];
   state.cursors = {};
   state.searchBuckets = new Map();
@@ -818,10 +883,9 @@ function setupInfiniteScroll() {
       window.__localFavsSet = new Set(keys || []);
     } catch {}
 
-    // IMPORTANT: Invalidate the cached Favourites view so switching to it reloads fresh data
+    // Invalidate the cached Favourites view so switching to it reloads fresh data
     if (state.viewCache?.faves) {
-      state.viewCache.faves.items = [];
-      state.viewCache.faves.search = '';
+      invalidateViewCache('faves');
     }
 
     if (state.viewType === 'faves') {

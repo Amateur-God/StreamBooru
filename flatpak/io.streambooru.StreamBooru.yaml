@@ -1,39 +1,24 @@
+# Legacy manual manifest — CI uses electron-builder --linux flatpak instead.
+# See electron-builder.yml (flatpak:) and .github/workflows/release.yml (flatpak job).
+#
+# Local build (requires flatpak + flathub SDK/base apps installed):
+#   npm ci
+#   npx electron-builder --linux flatpak --config electron-builder.yml
+
 app-id: io.streambooru.StreamBooru
 runtime: org.freedesktop.Platform
 runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
-sdk-extensions:
-  - org.freedesktop.Sdk.Extension.node20
 
 command: streambooru
+
 finish-args:
   - --share=ipc
-  - --socket=x11
+  - --socket=fallback-x11
   - --socket=wayland
-  - --device=all
+  - --device=dri
   - --share=network
   - --filesystem=home
+  - --filesystem=xdg-download
 
-modules:
-  - name: streambooru
-    buildsystem: simple
-    build-options:
-      env:
-        PATH: /usr/lib/sdk/node20/bin:$PATH
-      build-args:
-        - --share=network
-    build-commands:
-      - npm ci
-      - npx electron-builder --linux dir --config electron-builder.yml
-      - install -Dm755 dist/linux-unpacked/streambooru /app/bin/streambooru || true
-      - |
-        if [ ! -f /app/bin/streambooru ]; then
-          install -d /app/bin
-          cp -r dist/linux-unpacked/* /app/bin/
-          # fallback: try to find the binary name
-          BINARY="$(find dist/linux-unpacked -maxdepth 1 -type f -perm -111 | head -n1 || true)"
-          [ -n "$BINARY" ] && install -Dm755 "$BINARY" /app/bin/streambooru || true
-        fi
-    sources:
-      - type: dir
-        path: ../
+modules: []
