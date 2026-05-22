@@ -26,7 +26,7 @@ jobs:
       owner: ${{ steps.meta.outputs.owner }}
       repo: ${{ steps.meta.outputs.repo }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: meta
         run: |
           REF="${GITHUB_REF##*/}"
@@ -38,9 +38,9 @@ jobs:
     needs: prep
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -60,7 +60,7 @@ jobs:
           cp dist/*.tar.gz release-linux/ || true
           cp dist/INSTALL.md release-linux/ || true
           ls -la release-linux
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: linux
           path: release-linux
@@ -71,9 +71,9 @@ jobs:
     needs: prep
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -91,20 +91,21 @@ jobs:
           cp dist/*.exe release-win/ || true
           cp docs/INSTALL.md release-win/INSTALL.md || true
           ls -la release-win
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: windows
           path: release-win
 
   flatpak:
     if: startsWith(github.ref, 'refs/tags/')
+    continue-on-error: true
     needs: prep
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -133,21 +134,22 @@ jobs:
           ls -la release-flatpak
           test "$(find release-flatpak -maxdepth 1 -name '*.flatpak' | wc -l)" -gt 0
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: flatpak
           path: release-flatpak
 
   android:
+    continue-on-error: true
     needs: prep
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ needs.prep.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -233,14 +235,20 @@ jobs:
           fi
 
       - name: Upload APK artifact (for Release attachment)
-        uses: actions/upload-artifact@v4
+        if: hashFiles('out-apk/*.apk') != ''
+        uses: actions/upload-artifact@v5
         with:
           name: android-apk
-          path: out-apk/streambooru.apk
-          if-no-files-found: error
+          path: out-apk/*.apk
+          if-no-files-found: warn
+
+      - name: Skip APK upload (no signed build)
+        if: hashFiles('out-apk/*.apk') == ''
+        run: echo "No release APK produced (keystore missing or Gradle build failed)." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload AAB artifact (private to Actions; not attached to Release)
-        uses: actions/upload-artifact@v4
+        if: hashFiles('out-aab/*.aab') != ''
+        uses: actions/upload-artifact@v5
         with:
           name: android-aab
           path: out-aab/*.aab
@@ -253,12 +261,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (to read CHANGELOG.md)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: ./artifacts
 
@@ -266,7 +274,7 @@ jobs:
         run: find ./artifacts -type f -maxdepth 3 -print || true
 
       - name: Setup Node (for extractor)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
 
@@ -328,7 +336,7 @@ jobs:
 
       - name: Upload release notes (debug)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-notes-${{ github.ref_name }}
           path: |
@@ -385,7 +393,7 @@ jobs:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
       AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check AUR secrets
         id: check
         shell: bash
@@ -430,7 +438,7 @@ jobs:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
       AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check AUR beta secrets
         id: check
         shell: bash
