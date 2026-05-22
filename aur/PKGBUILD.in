@@ -1,7 +1,7 @@
 pkgname=@@PKGNAME@@
-pkgver=@@VERSION@@
+pkgver=@@PKGVER@@
 pkgrel=1
-pkgdesc="StreamBooru — cross‑platform Electron app to browse multiple booru sites"
+pkgdesc="StreamBooru — cross‑platform Electron app to browse multiple booru sites@@PKGDESC_SUFFIX@@"
 arch=('x86_64')
 url="https://github.com/@@OWNER@@/@@REPO@@"
 license=('GPL3')
@@ -15,12 +15,11 @@ optdepends=(
 )
 
 provides=('streambooru')
-conflicts=('streambooru')
+conflicts=(@@CONFLICTS@@)
 
-# The release asset is named exactly: streambooru-${pkgver}.tar.gz
-# Rename locally to have a stable filename in $srcdir.
+# Release asset: streambooru-${VERSION}.tar.gz (VERSION may contain hyphens for pre-releases)
 source=(
-  "streambooru-${pkgver}.tar.gz::https://github.com/@@OWNER@@/@@REPO@@/releases/download/v${pkgver}/streambooru-${pkgver}.tar.gz"
+  "streambooru-@@VERSION@@.tar.gz::https://github.com/@@OWNER@@/@@REPO@@/releases/download/v@@VERSION@@/streambooru-@@VERSION@@.tar.gz"
   "streambooru.sh"
   "streambooru.desktop"
 )
@@ -38,7 +37,7 @@ package() {
   # Robust extraction: works whether tarball has top-level folder or not
   local _tmp="${srcdir}/_extract"
   mkdir -p "${_tmp}"
-  tar -xzf "${srcdir}/streambooru-${pkgver}.tar.gz" -C "${_tmp}"
+  tar -xzf "${srcdir}/streambooru-@@VERSION@@.tar.gz" -C "${_tmp}"
 
   # Try to find directory where Electron binary lives
   local _app_src=""

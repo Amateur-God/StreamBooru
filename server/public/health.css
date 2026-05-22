@@ -1,0 +1,114 @@
+.health-wrap {
+  max-width: 720px;
+}
+
+.health-main {
+  display: grid;
+  gap: 16px;
+}
+
+.health-card {
+  text-align: center;
+  padding: 32px 24px;
+}
+
+.health-badge {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+
+.health-badge.loading {
+  color: var(--muted);
+  background: #1a1f2e;
+}
+
+.health-badge.ok {
+  color: #52d273;
+  background: rgba(82, 210, 115, 0.12);
+  border-color: rgba(82, 210, 115, 0.35);
+}
+
+.health-badge.bad {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.12);
+  border-color: rgba(255, 107, 107, 0.35);
+}
+
+.health-card h2 {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+}
+
+.health-sub {
+  margin: 0;
+  color: var(--muted);
+}
+
+.health-grid {
+  padding: 8px 0;
+}
+
+.check-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.check-row:last-child {
+  border-bottom: none;
+}
+
+.check-label {
+  color: var(--muted);
+}
+
+.check-value {
+  font-weight: 600;
+  text-align: right;
+}
+
+.check-value.ok { color: #52d273; }
+.check-value.bad { color: #ff6b6b; }
+.check-value.muted { color: var(--muted); font-weight: 500; }
+
+.health-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.health-actions .btn {
+  cursor: pointer;
+  font: inherit;
+}
+
+.health-json {
+  padding: 16px 20px;
+}
+
+.health-json summary {
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+
+.health-json pre {
+  margin: 12px 0 0;
+  padding: 12px;
+  background: #0b0d12;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 0.85rem;
+  color: #c8d0e0;
+}

@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish (e.g., v0.1.9)"
+        description: "Tag to publish (e.g., v1.0.2 or v1.1.0-beta.1)"
         required: true
         type: string
+      channel:
+        description: "AUR channel"
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
 
 permissions:
   contents: read
@@ -17,7 +25,6 @@ jobs:
     env:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
       AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
-      AUR_PACKAGE: ${{ secrets.AUR_PACKAGE }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,51 +33,53 @@ jobs:
       - name: Parse metadata
         id: meta
         run: |
-          REF="${{ inputs.tag }}"          # e.g., v0.1.9
+          REF="${{ inputs.tag }}"
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
           echo "owner=${GITHUB_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
           echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
 
-      - name: Generate PKGBUILD from template
+      - name: Resolve AUR package
+        id: pkg
+        run: |
+          if [ "${{ inputs.channel }}" = "beta" ]; then
+            echo "pkgname=${{ secrets.AUR_PACKAGE_BETA }}" >> "$GITHUB_OUTPUT"
+            echo "conflicts='streambooru' 'streambooru-bin'" >> "$GITHUB_OUTPUT"
+            echo "suffix= (pre-release)" >> "$GITHUB_OUTPUT"
+          else
+            echo "pkgname=${{ secrets.AUR_PACKAGE }}" >> "$GITHUB_OUTPUT"
+            echo "conflicts='streambooru' 'streambooru-bin-beta'" >> "$GITHUB_OUTPUT"
+            echo "suffix=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check AUR secrets
+        id: check
+        shell: bash
+        run: |
+          publish=true
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ] || [ -z "${AUR_USERNAME}" ] || [ -z "${{ steps.pkg.outputs.pkgname }}" ]; then
+            publish=false
+          fi
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate PKGBUILD
+        if: steps.check.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           OWNER:   ${{ steps.meta.outputs.owner }}
           REPO:    ${{ steps.meta.outputs.repo }}
-          PKGNAME: ${{ secrets.AUR_PACKAGE }}
         run: |
-          mkdir -p aur-out
-          sed -e "s|@@PKGNAME@@|${PKGNAME}|g" \
-              -e "s|@@VERSION@@|${VERSION}|g" \
-              -e "s|@@OWNER@@|${OWNER}|g" \
-              -e "s|@@REPO@@|${REPO}|g" \
-              aur/PKGBUILD.in > aur-out/PKGBUILD
-
-      - name: Compute sha256sums for release tarball (-bin)
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          OWNER:   ${{ steps.meta.outputs.owner }}
-          REPO:    ${{ steps.meta.outputs.repo }}
-        run: |
-          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/streambooru-${VERSION}.tar.gz"
-          curl -L "$ASSET_URL" -o "aur-out/streambooru-${VERSION}.tar.gz"
-          SHA=$(sha256sum "aur-out/streambooru-${VERSION}.tar.gz" | awk '{print $1}')
-          sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
-
-      - name: Create .SRCINFO
-        run: |
-          docker run --rm \
-            -u "$(id -u):$(id -g)" \
-            -e HOME=/tmp \
-            -v "$PWD/aur-out":/pkg \
-            -w /pkg \
-            archlinux:base-devel \
-            bash -lc 'makepkg --printsrcinfo > .SRCINFO'
-          ls -la aur-out
+          chmod +x scripts/publish-aur.sh
+          ./scripts/publish-aur.sh \
+            "${VERSION}" "${OWNER}" "${REPO}" \
+            "${{ steps.pkg.outputs.pkgname }}" \
+            "${{ steps.pkg.outputs.conflicts }}" \
+            "${{ steps.pkg.outputs.suffix }}"
 
       - name: Publish to AUR
+        if: steps.check.outputs.publish == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
         with:
-          pkgname: ${{ secrets.AUR_PACKAGE }}
+          pkgname: ${{ steps.pkg.outputs.pkgname }}
           pkgbuild: aur-out/PKGBUILD
           assets: |
             aur-out/.SRCINFO

@@ -98,6 +98,25 @@ function webAppRoot() {
   return null;
 }
 
+function oauthCallbackUrl(req, params = {}) {
+  const u = new URL('/oauth-callback', publicBase(req));
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null && v !== '') u.searchParams.set(k, String(v));
+  }
+  return u.toString();
+}
+
+function redirectOAuthResult(req, res, next, params) {
+  if (next && isAllowedDeepLink(next)) {
+    const u = new URL(next);
+    for (const [k, v] of Object.entries(params)) {
+      if (v != null && v !== '') u.searchParams.set(k, String(v));
+    }
+    return res.redirect(u.toString());
+  }
+  return res.redirect(oauthCallbackUrl(req, params));
+}
+
 /* helpers */
 function bodyObj(req) { const b = req.body; return b && typeof b === 'object' && !Array.isArray(b) ? b : {}; }
 
@@ -106,8 +125,47 @@ const userBus = new Map();
 function chanFor(uid) { if (!userBus.has(uid)) userBus.set(uid, new EventEmitter()); return userBus.get(uid); }
 function emitTo(uid, event, payload) { try { chanFor(uid).emit('event', { event, payload, ts: Date.now() }); } catch {} }
 
+function wantsHealthHtml(req) {
+  if (String(req.query.format || '').toLowerCase() === 'json') return false;
+  const accept = String(req.headers.accept || '').toLowerCase();
+  if (!accept || accept === '*/*') return false;
+  return accept.includes('text/html');
+}
+
+async function collectHealth() {
+  const ts = Date.now();
+  let db = { ok: false, latencyMs: null };
+  try {
+    const t0 = Date.now();
+    await query('SELECT 1 AS ok');
+    db = { ok: true, latencyMs: Date.now() - t0 };
+  } catch (e) {
+    db = { ok: false, latencyMs: null, error: String(e?.message || e) };
+  }
+  const ok = db.ok;
+  return {
+    ok,
+    ts,
+    db,
+    uptime: Math.floor(process.uptime()),
+    discord: { configured: !!(DISCORD_CLIENT_ID && DISCORD_CLIENT_SECRET) },
+    webapp: !!webAppRoot()
+  };
+}
+
 /* ---------- health ---------- */
-app.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/health', async (req, res) => {
+  if (wantsHealthHtml(req)) {
+    const page = path.join(__dirname, '../public/health.html');
+    if (fs.existsSync(page)) return res.sendFile(page);
+  }
+  try {
+    const status = await collectHealth();
+    res.status(status.ok ? 200 : 503).json(status);
+  } catch (e) {
+    res.status(503).json({ ok: false, ts: Date.now(), error: String(e?.message || e) });
+  }
+});
 
 /* ---------- local accounts ---------- */
 app.post('/auth/local/register', async (req, res) => {
@@ -233,12 +291,7 @@ app.get('/auth/discord/callback', async (req, res) => {
         return res.status(409).send('This Discord is already linked to another account.');
       }
       const next = String(state.next || '');
-      if (next && isAllowedDeepLink(next)) {
-        const u = new URL(next);
-        u.searchParams.set('linked', '1');
-        return res.redirect(u.toString());
-      }
-      return res.status(200).send('Discord account linked. You can close this window.');
+      return redirectOAuthResult(req, res, next, { linked: '1' });
     }
 
     const found = await query('SELECT id, username, avatar FROM users WHERE discord_id = $1', [discordId]);
@@ -268,13 +321,7 @@ app.get('/auth/discord/callback', async (req, res) => {
     const jwtToken = signToken({ id: userId, username: sessionUser.username, avatar: sessionUser.avatar });
 
     const next = String(state.next || '');
-    if (next && isAllowedDeepLink(next)) {
-      const u = new URL(next);
-      u.searchParams.set('token', jwtToken);
-      return res.redirect(u.toString());
-    }
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<h2>Login successful</h2><p>Token:</p><pre>${jwtToken}</pre>`);
+    return redirectOAuthResult(req, res, next, { token: jwtToken });
   } catch (e) {
     console.error('Discord callback error:', e?.message || e);
     res.status(500).send('Auth error');

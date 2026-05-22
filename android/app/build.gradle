@@ -7,8 +7,13 @@ android {
         applicationId "com.streambooru.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        def versionProps = new Properties()
+        def versionFile = rootProject.file('version.properties')
+        if (versionFile.exists()) {
+            versionFile.withInputStream { versionProps.load(it) }
+        }
+        versionCode (versionProps.getProperty('VERSION_CODE', '1') as Integer)
+        versionName versionProps.getProperty('VERSION_NAME', '1.0')
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

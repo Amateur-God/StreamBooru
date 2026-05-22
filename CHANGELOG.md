@@ -23,7 +23,7 @@ The format roughly follows Keep a Changelog, and dates are in YYYY-MM-DD.
 * **Sync server** migrated to Bun; native `fetch` replaces `node-fetch`; `start:prod` runs migrations then starts.
 * **Profile tags (web/Android)** — site tags and rating from Manage Sites are now merged into search/popular queries (matching desktop adapters).
 * **Discord login** — logging in with Discord after linking no longer overwrites your local username when a password is set.
-* **Release workflow** — pre-release tags skip AUR publish; Flatpak build uses electron-builder; release body built from changelog + auto notes.
+* **Release workflow** — pre-release tags publish to `streambooru-bin-beta` on AUR; stable tags publish to `streambooru-bin`; Flatpak build uses electron-builder; release body built from changelog + auto notes.
 
 ### Fixed
 * **Local login after Discord link** — username/password login works again after linking Discord to a local account.

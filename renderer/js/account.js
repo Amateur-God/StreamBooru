@@ -311,7 +311,13 @@
           const onWeb = typeof window !== 'undefined'
             && window.location.pathname.startsWith('/app')
             && !navigator.userAgent.includes('Electron');
-          if (!onWeb) {
+          if (onWeb) {
+            if (res.mode === 'popup') {
+              alert('Complete sign-in in the popup window. If the Discord app opened instead, authorize there then check for the popup or this tab.');
+            }
+            try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
+            stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 120000, intervalMs: 1500 });
+          } else {
             alert('Follow the browser flow; you’ll return to the app automatically.');
             try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
             stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 60000, intervalMs: 1500 });

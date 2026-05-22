@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StreamBooru — Health</title>
+  <link rel="stylesheet" href="/landing.css" />
+  <link rel="stylesheet" href="/health.css" />
+</head>
+<body>
+  <div class="wrap health-wrap">
+    <header class="hero">
+      <div class="logo">StreamBooru</div>
+      <p class="tagline">Sync server health</p>
+    </header>
+
+    <main class="health-main">
+      <section class="card health-card" id="status-card">
+        <div class="health-badge loading" id="status-badge">Checking…</div>
+        <h2 id="status-title">Running diagnostics</h2>
+        <p class="health-sub" id="status-sub">Contacting API…</p>
+      </section>
+
+      <section class="card health-grid" id="checks" hidden>
+        <div class="check-row">
+          <span class="check-label">API</span>
+          <span class="check-value" id="check-api">—</span>
+        </div>
+        <div class="check-row">
+          <span class="check-label">Database</span>
+          <span class="check-value" id="check-db">—</span>
+        </div>
+        <div class="check-row">
+          <span class="check-label">Response time</span>
+          <span class="check-value" id="check-latency">—</span>
+        </div>
+        <div class="check-row">
+          <span class="check-label">Server uptime</span>
+          <span class="check-value" id="check-uptime">—</span>
+        </div>
+        <div class="check-row">
+          <span class="check-label">Last checked</span>
+          <span class="check-value" id="check-ts">—</span>
+        </div>
+        <div class="check-row">
+          <span class="check-label">Discord OAuth</span>
+          <span class="check-value" id="check-discord">—</span>
+        </div>
+        <div class="check-row">
+          <span class="check-label">Web app</span>
+          <span class="check-value" id="check-webapp">—</span>
+        </div>
+      </section>
+
+      <div class="health-actions">
+        <button type="button" class="btn" id="btn-refresh">Refresh</button>
+        <a class="btn ghost" href="/">Home</a>
+        <a class="btn accent" href="/app/">Open Browser</a>
+      </div>
+
+      <details class="card health-json">
+        <summary>Raw JSON</summary>
+        <pre id="raw-json">{}</pre>
+      </details>
+    </main>
+  </div>
+
+  <script src="/health.js"></script>
+</body>
+</html>

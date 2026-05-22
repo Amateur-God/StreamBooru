@@ -13,24 +13,76 @@
       background: #0f1115;
       color: #e6e6e6;
       font-family: system-ui, sans-serif;
+      padding: 24px;
+      text-align: center;
     }
+    .box { max-width: 420px; }
+    h1 { font-size: 1.25rem; margin: 0 0 8px; }
+    p { color: #a9b0c0; margin: 0 0 16px; }
+    a {
+      color: #6aa2ff;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <p>Signing in…</p>
+  <div class="box">
+    <h1 id="title">Signing in…</h1>
+    <p id="msg">Completing Discord login.</p>
+    <p id="fallback" hidden><a href="/app/">Return to StreamBooru</a></p>
+  </div>
   <script>
   (function () {
     const params = new URLSearchParams(location.search);
     const token = params.get('token');
     const linked = params.get('linked');
-    const origin = location.origin.replace(/\/+$/, '');
+    const error = params.get('error');
+    const origin = location.origin;
     const KEY = 'sb_account_v1';
+    const title = document.getElementById('title');
+    const msg = document.getElementById('msg');
+    const fallback = document.getElementById('fallback');
 
+    function showDone(text) {
+      title.textContent = 'Done';
+      msg.textContent = text;
+      fallback.hidden = false;
+    }
+
+    if (error) {
+      title.textContent = 'Sign-in failed';
+      msg.textContent = error;
+      fallback.hidden = false;
+      return;
+    }
+
+    const payload = {
+      type: 'streambooru_oauth',
+      token: token || null,
+      linked: linked === '1' || linked === 'true'
+    };
+
+    // Popup flow: notify opener and close (keeps /app/ tab in front)
+    if (window.opener && !window.opener.closed) {
+      try {
+        window.opener.postMessage(payload, origin);
+        showDone('Signed in! This window should close automatically.');
+        setTimeout(function () { window.close(); }, 400);
+        setTimeout(function () { location.replace('/app/'); }, 2000);
+        return;
+      } catch (e) {
+        console.warn('postMessage failed', e);
+      }
+    }
+
+    // Full-page redirect fallback (mobile / popup blocked)
     if (token) {
       let acc = {};
       try { acc = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
       acc.token = token;
-      if (!acc.serverBase) acc.serverBase = origin;
+      if (!acc.serverBase) acc.serverBase = origin.replace(/\/+$/, '');
       localStorage.setItem(KEY, JSON.stringify(acc));
       location.replace('/app/');
       return;

@@ -14,7 +14,7 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "android:add": "npx cap add android",
-    "android:sync": "npx cap sync android",
+    "android:sync": "node scripts/sync-android-version.mjs && npx cap sync android",
     "android:open": "npx cap open android",
     "android:build": "cd android && ./gradlew assembleDebug",
     "android:release": "cd android && ./gradlew bundleRelease",

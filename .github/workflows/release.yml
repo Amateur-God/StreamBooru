@@ -140,6 +140,8 @@ jobs:
   android:
     needs: prep
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.prep.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -151,6 +153,9 @@ jobs:
 
       - name: Install deps
         run: npm ci
+
+      - name: Sync Android version from release tag
+        run: node scripts/sync-android-version.mjs
 
       - name: Add & Sync Capacitor Android
         run: |
@@ -210,9 +215,10 @@ jobs:
         run: |
           set -e
           mkdir -p out-apk out-aab
-          # Rename APK -> streambooru.apk (for GitHub Release)
+          APK_BASENAME="$(grep '^APK_BASENAME=' android/version.properties | cut -d= -f2-)"
+          if [ -z "$APK_BASENAME" ]; then APK_BASENAME="streambooru"; fi
           if compgen -G "android/app/build/outputs/apk/release/*.apk" > /dev/null; then
-            cp android/app/build/outputs/apk/release/*.apk out-apk/streambooru.apk
+            cp android/app/build/outputs/apk/release/*.apk "out-apk/${APK_BASENAME}.apk"
             ls -la out-apk || true
           else
             echo "No release APK found."
@@ -347,7 +353,7 @@ jobs:
             artifacts/linux/**
             artifacts/windows/**
             artifacts/flatpak/**
-            artifacts/android-apk/streambooru.apk
+            artifacts/android-apk/*.apk
 
       - name: Create/Update GitHub Release (auto-generated notes only)
         if: steps.body.outputs.found != 'true'
@@ -364,9 +370,9 @@ jobs:
             artifacts/linux/**
             artifacts/windows/**
             artifacts/flatpak/**
-            artifacts/android-apk/streambooru.apk
+            artifacts/android-apk/*.apk
 
-  aur:
+  aur-stable:
     if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
     needs: [prep, create-release]
     runs-on: ubuntu-latest
@@ -374,10 +380,9 @@ jobs:
       VERSION: ${{ needs.prep.outputs.version }}
       OWNER:   ${{ needs.prep.outputs.owner }}
       REPO:    ${{ needs.prep.outputs.repo }}
-      PKGNAME: ${{ secrets.AUR_PACKAGE }}
+      AUR_PACKAGE: ${{ secrets.AUR_PACKAGE }}
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
       AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
-      AUR_PACKAGE: ${{ secrets.AUR_PACKAGE }}
     steps:
       - uses: actions/checkout@v4
       - name: Check AUR secrets
@@ -390,40 +395,63 @@ jobs:
           fi
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
           if [ "${publish}" != "true" ]; then
-            echo "AUR secrets missing; skipping AUR publish." >> "$GITHUB_STEP_SUMMARY"
+            echo "AUR stable secrets missing; skipping." >> "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Generate PKGBUILD from template
+      - name: Generate and publish stable AUR package
         if: steps.check.outputs.publish == 'true'
         run: |
-          mkdir -p aur-out
-          sed -e "s|@@PKGNAME@@|${PKGNAME}|g" \
-              -e "s|@@VERSION@@|${VERSION}|g" \
-              -e "s|@@OWNER@@|${OWNER}|g" \
-              -e "s|@@REPO@@|${REPO}|g" \
-              aur/PKGBUILD.in > aur-out/PKGBUILD
-      - name: Compute sha256sums for release tarball (-bin)
-        if: steps.check.outputs.publish == 'true'
-        run: |
-          ASSET_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/streambooru-${VERSION}.tar.gz"
-          curl -L "$ASSET_URL" -o "aur-out/streambooru-${VERSION}.tar.gz"
-          SHA=$(sha256sum "aur-out/streambooru-${VERSION}.tar.gz" | awk '{print $1}')
-          sed -i "s|@@SHA256@@|${SHA}|g" aur-out/PKGBUILD
-      - name: Create .SRCINFO
-        if: steps.check.outputs.publish == 'true'
-        run: |
-          docker run --rm \
-            -u "$(id -u):$(id -g)" \
-            -e HOME=/tmp \
-            -v "$PWD/aur-out":/pkg \
-            -w /pkg \
-            archlinux:base-devel \
-            bash -lc 'makepkg --printsrcinfo > .SRCINFO'
-          ls -la aur-out
+          chmod +x scripts/publish-aur.sh
+          ./scripts/publish-aur.sh "${VERSION}" "${OWNER}" "${REPO}" "${AUR_PACKAGE}" "'streambooru' 'streambooru-bin-beta'"
       - name: Publish to AUR
         if: steps.check.outputs.publish == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
         with:
           pkgname: ${{ secrets.AUR_PACKAGE }}
+          pkgbuild: aur-out/PKGBUILD
+          assets: |
+            aur-out/.SRCINFO
+            aur/streambooru.sh
+            aur/streambooru.desktop
+          commit_username: "github-actions[bot]"
+          commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          ssh_keyscan_types: rsa,ecdsa,ed25519
+
+  aur-beta:
+    if: startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-')
+    needs: [prep, create-release]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prep.outputs.version }}
+      OWNER:   ${{ needs.prep.outputs.owner }}
+      REPO:    ${{ needs.prep.outputs.repo }}
+      AUR_PACKAGE_BETA: ${{ secrets.AUR_PACKAGE_BETA }}
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check AUR beta secrets
+        id: check
+        shell: bash
+        run: |
+          publish=true
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ] || [ -z "${AUR_USERNAME}" ] || [ -z "${AUR_PACKAGE_BETA}" ]; then
+            publish=false
+          fi
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          if [ "${publish}" != "true" ]; then
+            echo "AUR beta secrets missing; skipping." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Generate and publish beta AUR package
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          chmod +x scripts/publish-aur.sh
+          ./scripts/publish-aur.sh "${VERSION}" "${OWNER}" "${REPO}" "${AUR_PACKAGE_BETA}" "'streambooru' 'streambooru-bin'" " (pre-release)"
+      - name: Publish to AUR
+        if: steps.check.outputs.publish == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.1
+        with:
+          pkgname: ${{ secrets.AUR_PACKAGE_BETA }}
           pkgbuild: aur-out/PKGBUILD
           assets: |
             aur-out/.SRCINFO

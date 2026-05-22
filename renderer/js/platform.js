@@ -17,6 +17,21 @@
     const base = defaultOriginBase() || (typeof window !== 'undefined' ? window.location.origin.replace(/\/+$/, '') : '');
     return `${base}/oauth-callback`;
   }
+  function isMobileWeb() {
+    return isWebBrowser() && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+  }
+  function openWebOAuth(url) {
+    // Popup keeps StreamBooru open; avoids Discord desktop app swallowing the redirect
+    if (isWebBrowser() && !isMobileWeb()) {
+      const popup = window.open(url, 'streambooru_oauth', 'popup=yes,width=520,height=720,resizable=yes,scrollbars=yes');
+      if (popup) {
+        try { popup.focus(); } catch {}
+        return { ok: true, pending: true, mode: 'popup', popup };
+      }
+    }
+    window.location.href = url;
+    return { ok: true, pending: true, mode: 'redirect' };
+  }
 
   // native HTTP
   const UA = 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36';
@@ -753,6 +768,53 @@
   }
 
   // Deep link handling (Discord login) — attach ASAP and also on resume
+  async function finishOAuthLogin(token) {
+    if (!token) return;
+    const acc = accLoad();
+    acc.token = token;
+    if (!acc.serverBase) {
+      const o = defaultOriginBase() || (typeof window !== 'undefined' ? window.location.origin.replace(/\/+$/, '') : '');
+      if (o) acc.serverBase = o;
+    }
+    const base = accGetBase(acc);
+    try {
+      if (base) {
+        const me = await getMe(base, token);
+        if (me?.ok && me.user) acc.user = me.user;
+      }
+    } catch {}
+    accSave(acc);
+    openSse();
+    window.events?.emitAccountChanged?.();
+    try { await (window.api?.syncOnLogin?.()); } catch {}
+  }
+
+  async function finishOAuthLink() {
+    const acc = accLoad();
+    const base = accGetBase(acc);
+    if (!base || !acc.token) return;
+    try {
+      const me = await getMe(base, acc.token);
+      if (me?.ok && me.user) { acc.user = me.user; accSave(acc); }
+    } catch {}
+    window.events?.emitAccountChanged?.();
+  }
+
+  function handleWebOAuthMessage(ev) {
+    if (!isWebBrowser()) return;
+    try {
+      if (ev.origin !== window.location.origin) return;
+      const d = ev.data;
+      if (!d || d.type !== 'streambooru_oauth') return;
+      if (d.token) finishOAuthLogin(d.token);
+      else if (d.linked) finishOAuthLink();
+    } catch {}
+  }
+
+  if (isWebBrowser()) {
+    window.addEventListener('message', handleWebOAuthMessage);
+  }
+
   function handleDeepLink(url) {
     try {
       if (!url || !String(url).startsWith('streambooru://')) return;
@@ -940,8 +1002,8 @@
         }
         if (!base) return { ok: false, error: 'No server selected' };
         if (isWebBrowser()) {
-          window.location.href = `${base}/auth/discord?redirect_uri=${encodeURIComponent(webOAuthRedirect())}`;
-          return { ok: true, pending: true };
+          const url = `${base}/auth/discord?redirect_uri=${encodeURIComponent(webOAuthRedirect())}`;
+          return openWebOAuth(url);
         }
         const deepLink = 'streambooru://oauth/discord';
         await window.Platform.openExternal(`${base}/auth/discord?redirect_uri=${encodeURIComponent(deepLink)}`);
@@ -954,7 +1016,7 @@
           const next = isWebBrowser() ? webOAuthRedirect() : 'streambooru://oauth/linked';
           const start = await httpGetJSON(`${base}/api/link/discord/start?next=${encodeURIComponent(next)}`, { Authorization: `Bearer ${acc.token}` });
           if (start?.ok && start.url) {
-            if (isWebBrowser()) { window.location.href = start.url; return { ok: true, pending: true }; }
+            if (isWebBrowser()) return openWebOAuth(start.url);
             await window.Platform.openExternal(start.url);
             return { ok: true, pending: true };
           }
