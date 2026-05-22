@@ -611,14 +611,16 @@ app.get('/api/stream', (req, res) => {
 });
 
 /* ---------- Image proxy ---------- */
-function isProxyAllowed(url) {
+const BOORU_UA = 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36';
+
+function isBooruHostAllowed(url) {
   try {
     const u = new URL(url);
     const h = u.hostname.toLowerCase();
     const okProto = u.protocol === 'https:' || u.protocol === 'http:';
     const allow =
       h.endsWith('donmai.us') ||
-      h === 'files.yande.re' ||
+      h === 'files.yande.re' || h.endsWith('yande.re') ||
       h === 'konachan.com' || h === 'konachan.net' ||
       h.endsWith('e621.net') || h.endsWith('e926.net') ||
       h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
@@ -628,6 +630,8 @@ function isProxyAllowed(url) {
     return okProto && allow;
   } catch { return false; }
 }
+
+function isProxyAllowed(url) { return isBooruHostAllowed(url); }
 function refererFor(url) {
   try {
     const h = new URL(url).hostname.toLowerCase();
@@ -702,6 +706,53 @@ app.get('/imgproxy', async (req, res) => {
   } catch (e) {
     console.error('imgproxy error', e);
     res.status(500).end('proxy error');
+  }
+});
+
+/* ---------- Booru API proxy (web browser CORS bypass) ---------- */
+function setBooruProxyCors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Accept, Content-Type');
+  res.setHeader('Vary', 'Origin');
+}
+
+app.options('/api/booru/fetch', (req, res) => {
+  setBooruProxyCors(res);
+  res.status(204).end();
+});
+
+app.get('/api/booru/fetch', async (req, res) => {
+  setBooruProxyCors(res);
+  try {
+    const url = String(req.query.url || '');
+    if (!url || !isBooruHostAllowed(url)) {
+      return res.status(400).json({ ok: false, error: 'url not allowed' });
+    }
+
+    const accept = String(req.query.accept || 'application/json, text/plain, */*');
+    const hdr = {
+      'User-Agent': BOORU_UA,
+      Accept: accept,
+    };
+
+    const ref = refererFor(url);
+    if (ref) {
+      hdr.Referer = ref;
+      try { hdr.Origin = new URL(ref).origin; } catch { hdr.Origin = ref; }
+    }
+
+    const upstream = await fetch(url, { headers: hdr, redirect: 'follow' });
+    const ct = upstream.headers.get('content-type') || 'application/octet-stream';
+    const body = Buffer.from(await upstream.arrayBuffer());
+
+    res.status(upstream.status);
+    res.setHeader('Content-Type', ct);
+    res.setHeader('Cache-Control', 'public, max-age=30');
+    res.end(body);
+  } catch (e) {
+    console.error('booru fetch proxy error', e?.message || e);
+    res.status(502).json({ ok: false, error: 'proxy error' });
   }
 });
 

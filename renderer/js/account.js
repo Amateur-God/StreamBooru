@@ -319,14 +319,9 @@
             btnLoginDiscord.disabled = false;
             return;
           }
-          if (res.mode === 'popup') {
-            status.textContent = 'Complete sign-in in the popup window…';
-          } else {
-            status.textContent = 'Redirecting to Discord…';
-          }
+          status.textContent = 'Redirecting to Discord…';
           try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
           stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 120000, intervalMs: 1500 });
-          btnLoginDiscord.disabled = false;
           return;
         }
         (async () => {

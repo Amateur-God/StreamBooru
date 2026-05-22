@@ -32,19 +32,7 @@
     return { ok: true, url, base };
   }
   function openWebOAuth(url) {
-    // Must open the window synchronously on click — async breaks popup blockers.
-    if (isWebBrowser() && !isMobileWeb()) {
-      const popup = window.open('about:blank', 'streambooru_oauth', 'popup=yes,width=520,height=720,resizable=yes,scrollbars=yes');
-      if (popup) {
-        try {
-          popup.location.href = url;
-          popup.focus();
-          return { ok: true, pending: true, mode: 'popup', popup };
-        } catch {
-          try { popup.close(); } catch {}
-        }
-      }
-    }
+    // Same-tab redirect is the most reliable path in browsers (popups are often blocked silently).
     window.location.assign(url);
     return { ok: true, pending: true, mode: 'redirect' };
   }
@@ -97,6 +85,19 @@
   })();
 
   // HTTP helpers
+  function webProxyBase() {
+    if (!isWebBrowser()) return '';
+    const acc = typeof accLoad === 'function' ? accLoad() : {};
+    return accGetBase(acc) || defaultOriginBase();
+  }
+  async function fetchViaBooruProxy(url, accept) {
+    const base = webProxyBase();
+    if (!base) return null;
+    const proxy = `${base}/api/booru/fetch?url=${encodeURIComponent(url)}&accept=${encodeURIComponent(accept)}`;
+    const r = await fetch(proxy, { headers: { Accept: accept } });
+    if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+    return r;
+  }
   async function httpGetJSON(url, headers = {}) {
     const Http = getHttp();
     if (isAndroid() && Http?.get) {
@@ -111,6 +112,14 @@
       let data = res.data;
       if (typeof data === 'string') { try { data = JSON.parse(data); } catch {} }
       return data;
+    }
+    if (isWebBrowser()) {
+      try {
+        const r = await fetchViaBooruProxy(url, 'application/json');
+        if (r) return r.json();
+      } catch (e) {
+        console.warn('booru proxy json failed, trying direct', e?.message || e);
+      }
     }
     const r = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': UA, ...headers } });
     if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
@@ -129,6 +138,14 @@
       const status = res.status ?? 0;
       if (status < 200 || status >= 300) throw new Error(`HTTP ${status} for ${url}`);
       return String(res.data ?? '');
+    }
+    if (isWebBrowser()) {
+      try {
+        const r = await fetchViaBooruProxy(url, 'text/plain, application/xml, text/xml, */*');
+        if (r) return r.text();
+      } catch (e) {
+        console.warn('booru proxy text failed, trying direct', e?.message || e);
+      }
     }
     const r = await fetch(url, { headers: { 'User-Agent': UA, ...headers } });
     if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
@@ -1030,24 +1047,12 @@
         if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
         try {
           const next = isWebBrowser() ? webOAuthRedirect() : 'streambooru://oauth/linked';
-          let popup = null;
-          if (isWebBrowser() && !isMobileWeb()) {
-            popup = window.open('about:blank', 'streambooru_oauth', 'popup=yes,width=520,height=720,resizable=yes,scrollbars=yes');
-          }
           const start = await httpGetJSON(`${base}/api/link/discord/start?next=${encodeURIComponent(next)}`, { Authorization: `Bearer ${acc.token}` });
           if (start?.ok && start.url) {
-            if (isWebBrowser()) {
-              if (popup) {
-                try { popup.location.href = start.url; popup.focus(); return { ok: true, pending: true, mode: 'popup', popup }; }
-                catch { try { popup.close(); } catch {} }
-              }
-              window.location.assign(start.url);
-              return { ok: true, pending: true, mode: 'redirect' };
-            }
+            if (isWebBrowser()) return openWebOAuth(start.url);
             await window.Platform.openExternal(start.url);
             return { ok: true, pending: true };
           }
-          if (popup) { try { popup.close(); } catch {} }
           return { ok: false, error: 'Server refused link start' };
         } catch (e) { return { ok: false, error: String(e?.message || e) }; }
       },
