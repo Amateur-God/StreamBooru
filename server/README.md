@@ -27,8 +27,19 @@ Runtime: **Bun** (v0.2.0+). Database: **PostgreSQL**.
 
 Health check path: `/health`
 
+Public routes:
+
+| Path | Description |
+|------|-------------|
+| `/` | Landing page |
+| `/app/` | Web-based StreamBooru browser (renderer copied at build time) |
+| `/oauth-callback` | Discord OAuth return page for web login |
+
 Discord OAuth redirect URI (if using Discord):  
 `{BASE_URL}/auth/discord/callback`
+
+For web login, add this redirect in the Discord app settings (optional, used as `redirect_uri` in OAuth state):  
+`{BASE_URL}/oauth-callback`
 
 ## Local development
 

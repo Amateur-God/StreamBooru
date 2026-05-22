@@ -13,5 +13,8 @@ cmds = [
 [phases.install]
 cmds = ['bun install --ignore-scripts']
 
+[phases.build]
+cmds = ['rm -rf webapp && cp -r ../renderer webapp']
+
 [start]
 cmd = 'bun run start:prod'

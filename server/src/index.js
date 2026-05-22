@@ -6,6 +6,8 @@ const bcrypt = require('bcryptjs');
 const { EventEmitter } = require('events');
 const { Readable } = require('stream');
 const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
 
 const { query, pool } = require('./db');
 const { enc, dec } = require('./crypto');
@@ -72,7 +74,29 @@ function auth(req, res, next) {
   }
 }
 function cryptoRandomId() { return crypto.randomBytes(16).toString('hex'); }
-function isAllowedDeepLink(url) { return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost') || url.startsWith('streambooru://'); }
+function isAllowedDeepLink(url) {
+  const u = String(url || '').trim();
+  if (!u) return false;
+  if (u.startsWith('streambooru://')) return true;
+  if (u.startsWith('http://127.0.0.1') || u.startsWith('http://localhost')) return true;
+  if (STATIC_BASE_URL && u.startsWith(STATIC_BASE_URL)) return true;
+  try {
+    const parsed = new URL(u);
+    if (parsed.pathname === '/oauth-callback' || parsed.pathname === '/app/oauth-callback') return true;
+  } catch {}
+  return false;
+}
+
+function webAppRoot() {
+  const candidates = [
+    path.join(__dirname, '../webapp'),
+    path.join(__dirname, '../../renderer')
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'index.html'))) return dir;
+  }
+  return null;
+}
 
 /* helpers */
 function bodyObj(req) { const b = req.body; return b && typeof b === 'object' && !Array.isArray(b) ? b : {}; }
@@ -209,7 +233,7 @@ app.get('/auth/discord/callback', async (req, res) => {
         return res.status(409).send('This Discord is already linked to another account.');
       }
       const next = String(state.next || '');
-      if (next && (next.startsWith('http://127.0.0.1') || next.startsWith('http://localhost') || next.startsWith('streambooru://'))) {
+      if (next && isAllowedDeepLink(next)) {
         const u = new URL(next);
         u.searchParams.set('linked', '1');
         return res.redirect(u.toString());
@@ -219,19 +243,32 @@ app.get('/auth/discord/callback', async (req, res) => {
 
     const found = await query('SELECT id, username, avatar FROM users WHERE discord_id = $1', [discordId]);
     let userId;
+    let sessionUser = { username: profile.username, avatar: profile.avatar };
     if (found.rowCount > 0) {
       userId = found.rows[0].id;
-      await query('UPDATE users SET username = $1, avatar = $2 WHERE id = $3', [profile.username, profile.avatar, userId]);
+      const updated = await query(
+        `UPDATE users SET avatar = $2,
+         username = CASE WHEN password_hash IS NOT NULL AND password_hash <> '' THEN username ELSE $1 END
+         WHERE id = $3
+         RETURNING username, avatar`,
+        [profile.username, profile.avatar, userId]
+      );
+      if (updated.rows[0]) {
+        sessionUser = {
+          username: updated.rows[0].username || profile.username,
+          avatar: updated.rows[0].avatar || profile.avatar
+        };
+      }
     } else {
       userId = `discord:${discordId}`;
       const created_at = Date.now();
       await query(`INSERT INTO users (id, username, avatar, created_at, discord_id) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
         [userId, profile.username, profile.avatar, created_at, discordId]);
     }
-    const jwtToken = signToken({ id: userId, username: profile.username, avatar: profile.avatar });
+    const jwtToken = signToken({ id: userId, username: sessionUser.username, avatar: sessionUser.avatar });
 
     const next = String(state.next || '');
-    if (next && (next.startsWith('http://127.0.0.1') || next.startsWith('http://localhost') || next.startsWith('streambooru://'))) {
+    if (next && isAllowedDeepLink(next)) {
       const u = new URL(next);
       u.searchParams.set('token', jwtToken);
       return res.redirect(u.toString());
@@ -241,6 +278,16 @@ app.get('/auth/discord/callback', async (req, res) => {
   } catch (e) {
     console.error('Discord callback error:', e?.message || e);
     res.status(500).send('Auth error');
+  }
+});
+
+app.post('/auth/discord/unlink', auth, async (req, res) => {
+  try {
+    await query('UPDATE users SET discord_id = NULL WHERE id = $1', [req.user.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Discord unlink error:', e?.message || e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -610,6 +657,31 @@ app.get('/imgproxy', async (req, res) => {
     res.status(500).end('proxy error');
   }
 });
+
+/* ---------- static: landing + web app ---------- */
+const publicDir = path.join(__dirname, '../public');
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir, { index: false, maxAge: '1h' }));
+  app.get('/', (_req, res) => {
+    const landing = path.join(publicDir, 'index.html');
+    if (fs.existsSync(landing)) return res.sendFile(landing);
+    res.redirect('/app/');
+  });
+  app.get('/oauth-callback', (_req, res) => {
+    const page = path.join(publicDir, 'oauth-callback.html');
+    if (fs.existsSync(page)) return res.sendFile(page);
+    res.status(404).send('OAuth callback page missing');
+  });
+}
+
+const webRoot = webAppRoot();
+if (webRoot) {
+  app.use('/app', express.static(webRoot, { index: 'index.html', maxAge: '1h' }));
+  app.get('/app', (_req, res) => res.sendFile(path.join(webRoot, 'index.html')));
+  console.log(`Web app served from ${webRoot} at /app/`);
+} else {
+  console.warn('Web app not found (copy renderer to server/webapp for /app/)');
+}
 
 /* ---------- start ---------- */
 app.listen(PORT, HOST, () => {

@@ -180,11 +180,21 @@
 
     async function refresh() {
       const a = await (window.api.accountGet?.() || {});
+      const origin = (typeof window !== 'undefined' && window.location?.origin)
+        ? window.location.origin.replace(/\/+$/, '')
+        : '';
+      if (origin) {
+        let label = origin;
+        try { label = `${new URL(origin).host} (this server)`; } catch {}
+        ensureOption(serverSelect, origin, label);
+      }
       const curRaw = String(a.serverBase || '').trim();
       const cur = curRaw.replace(/\/+$/,'');
       if (cur) ensureOption(serverSelect, cur);
       if (cur && Array.from(serverSelect.options).some(o => o.value.replace(/\/+$/,'') === cur)) {
         serverSelect.value = cur;
+      } else if (origin) {
+        serverSelect.value = origin;
       } else if (cur.includes('.ecchibooru.')) {
         serverSelect.value = 'https://streambooru.ecchibooru.uk';
       } else {
@@ -192,7 +202,9 @@
       }
 
       // default server if none persisted
-      if (!a.serverBase) { await window.api.accountSetServer?.(serverSelect.value); }
+      if (!a.serverBase) {
+        await window.api.accountSetServer?.(origin || serverSelect.value);
+      }
 
       const who = a.user ? `${a.user.name || a.user.id}` : 'Not logged in';
       status.textContent = `Server: ${serverSelect.value} • ${a.loggedIn ? 'Logged in as ' + who : 'Not logged in'}`;
@@ -296,9 +308,14 @@
         const res = await window.api.accountLoginDiscord?.();
         if (!res?.ok) alert('Login failed' + (res?.error ? `: ${res.error}` : ''));
         else {
-          alert('Follow the browser flow; you’ll return to the app automatically.');
-          try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
-          stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 60000, intervalMs: 1500 });
+          const onWeb = typeof window !== 'undefined'
+            && window.location.pathname.startsWith('/app')
+            && !navigator.userAgent.includes('Electron');
+          if (!onWeb) {
+            alert('Follow the browser flow; you’ll return to the app automatically.');
+            try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
+            stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 60000, intervalMs: 1500 });
+          }
         }
       } finally { btnLoginDiscord.disabled = false; await refresh(); }
     });

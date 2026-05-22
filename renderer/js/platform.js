@@ -6,6 +6,17 @@
   const isElectron = () => navigator.userAgent.includes('Electron');
   const C = typeof window !== 'undefined' ? window.Capacitor : undefined;
   const isAndroid = () => !!C && typeof C.getPlatform === 'function' && C.getPlatform() === 'android';
+  const isWebBrowser = () => !isElectron() && !isAndroid();
+  function defaultOriginBase() {
+    if (typeof window === 'undefined' || !window.location?.origin) return '';
+    const origin = window.location.origin.replace(/\/+$/, '');
+    if (window.location.pathname.startsWith('/app')) return origin;
+    return '';
+  }
+  function webOAuthRedirect() {
+    const base = defaultOriginBase() || (typeof window !== 'undefined' ? window.location.origin.replace(/\/+$/, '') : '');
+    return `${base}/oauth-callback`;
+  }
 
   // native HTTP
   const UA = 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36';
@@ -589,7 +600,8 @@
   function accLoad() { try { return JSON.parse(localStorage.getItem(ACC_KEY) || '{}'); } catch { return {}; } }
   function accSave(obj) { try { localStorage.setItem(ACC_KEY, JSON.stringify(obj || {})); } catch {} }
   function accGetBase(acc) {
-    const b = String(acc?.serverBase || '').trim();
+    let b = String(acc?.serverBase || '').trim();
+    if (!b && isWebBrowser()) b = defaultOriginBase();
     if (!b) return '';
     try { const u = new URL(b); return u.toString().replace(/\/+$/,''); } catch { return b.replace(/\/+$/,''); }
   }
@@ -869,6 +881,10 @@
       // Accounts
       accountGet: async () => {
         const acc = accLoad();
+        if (isWebBrowser() && !acc.serverBase) {
+          const origin = defaultOriginBase();
+          if (origin) { acc.serverBase = origin; accSave(acc); }
+        }
         setTimeout(openSse, 0);
         return { serverBase: acc.serverBase || '', token: acc.token || '', user: acc.user || null, loggedIn: !!acc.token };
       },
@@ -916,8 +932,17 @@
         return { ok: true, user: acc.user || null };
       },
       accountLoginDiscord: async () => {
-        const acc = accLoad(); const base = accGetBase(acc);
+        const acc = accLoad();
+        let base = accGetBase(acc);
+        if (!base && isWebBrowser()) {
+          base = defaultOriginBase();
+          if (base) { acc.serverBase = base; accSave(acc); }
+        }
         if (!base) return { ok: false, error: 'No server selected' };
+        if (isWebBrowser()) {
+          window.location.href = `${base}/auth/discord?redirect_uri=${encodeURIComponent(webOAuthRedirect())}`;
+          return { ok: true, pending: true };
+        }
         const deepLink = 'streambooru://oauth/discord';
         await window.Platform.openExternal(`${base}/auth/discord?redirect_uri=${encodeURIComponent(deepLink)}`);
         return { ok: true, pending: true };
@@ -926,9 +951,13 @@
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
         try {
-          const next = 'streambooru://oauth/linked';
+          const next = isWebBrowser() ? webOAuthRedirect() : 'streambooru://oauth/linked';
           const start = await httpGetJSON(`${base}/api/link/discord/start?next=${encodeURIComponent(next)}`, { Authorization: `Bearer ${acc.token}` });
-          if (start?.ok && start.url) { await window.Platform.openExternal(start.url); return { ok: true, pending: true }; }
+          if (start?.ok && start.url) {
+            if (isWebBrowser()) { window.location.href = start.url; return { ok: true, pending: true }; }
+            await window.Platform.openExternal(start.url);
+            return { ok: true, pending: true };
+          }
           return { ok: false, error: 'Server refused link start' };
         } catch (e) { return { ok: false, error: String(e?.message || e) }; }
       },
@@ -1002,9 +1031,26 @@
     // If already logged in at load, pull sites and favourites once
     (async () => {
       const acc = accLoad();
+      if (isWebBrowser() && !acc.serverBase) {
+        const origin = defaultOriginBase();
+        if (origin) { acc.serverBase = origin; accSave(acc); }
+      }
       if (acc?.token && accGetBase(acc)) {
         try { await syncReplaceFavorites(); window.events?.emit?.('favorites_changed', { source: 'startup' }); } catch {}
         try { await pullSitesFromServerAndSave(); } catch {}
+      }
+      if (isWebBrowser()) {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          if (params.get('linked') === '1') {
+            const base = accGetBase(acc);
+            if (base && acc.token) {
+              const me = await getMe(base, acc.token);
+              if (me?.ok && me.user) { acc.user = me.user; accSave(acc); window.events?.emitAccountChanged?.(); }
+            }
+            history.replaceState({}, '', window.location.pathname);
+          }
+        } catch {}
       }
     })();
   }
