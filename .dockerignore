@@ -1,0 +1,19 @@
+# Keep Coolify/Nixpacks build context small (server + renderer are required)
+node_modules
+android
+dist
+release-*
+.git
+.github
+flatpak
+aur
+aur-out
+out-apk
+out-aab
+server/webapp
+electron
+build
+docs
+scripts
+*.md
+!server/README.md

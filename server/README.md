@@ -7,8 +7,8 @@ Runtime: **Bun** (v0.2.0+). Database: **PostgreSQL**.
 ## Coolify deployment
 
 1. Create a new application in Coolify pointing at this repo.
-2. Set **Base Directory** to `server`.
-3. Nixpacks will pick up `nixpacks.toml` automatically (installs Bun, runs `bun install`, starts with migrations).
+2. Set **Base Directory** to `/` (repository root — **not** `server`).
+3. Nixpacks uses the root `nixpacks.toml`: installs Bun deps in `server/`, copies `renderer/` → `server/webapp/` at build time, then runs migrations and starts the API.
 4. Add a PostgreSQL database (Coolify plugin or external) and set environment variables:
 
 | Variable | Required | Notes |

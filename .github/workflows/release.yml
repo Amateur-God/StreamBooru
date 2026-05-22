@@ -274,9 +274,35 @@ jobs:
             node ./scripts/extract-changelog.mjs "$TAG" "./docs/CHANGELOG.md" "./CHANGELOG_RELEASE.md" || true
           fi
 
-          if [ -s "./CHANGELOG_RELEASE.md" ]; then
+      - name: Generate GitHub release notes
+        id: ghnotes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          ARGS=(-f "tag_name=${TAG}" -f "target_commitish=${TAG}")
+          if [ -n "$PREV_TAG" ]; then
+            ARGS+=(-f "previous_tag_name=${PREV_TAG}")
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/generate-release-notes" "${ARGS[@]}" --jq '.body' > GITHUB_NOTES.md 2>/dev/null; then
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          else
+            : > GITHUB_NOTES.md
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build combined release body
+        id: body
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ./scripts/build-release-notes.mjs "./RELEASE_BODY.md" "./CHANGELOG_RELEASE.md" "./GITHUB_NOTES.md"
+          if [ -s "./RELEASE_BODY.md" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "notes_path=CHANGELOG_RELEASE.md" >> "$GITHUB_OUTPUT"
+            echo "notes_path=RELEASE_BODY.md" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
@@ -293,22 +319,25 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload extracted notes (debug)
+      - name: Upload release notes (debug)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: changelog-extract-${{ github.ref_name }}
-          path: CHANGELOG_RELEASE.md
+          name: release-notes-${{ github.ref_name }}
+          path: |
+            CHANGELOG_RELEASE.md
+            GITHUB_NOTES.md
+            RELEASE_BODY.md
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Create/Update GitHub Release (CHANGELOG body)
-        if: steps.extract.outputs.found == 'true'
+      - name: Create/Update GitHub Release
+        if: steps.body.outputs.found == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body_path: ${{ steps.extract.outputs.notes_path }}
+          body_path: ${{ steps.body.outputs.notes_path }}
           generate_release_notes: false
           prerelease: ${{ steps.flags.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.flags.outputs.prerelease != 'true' }}
@@ -320,8 +349,8 @@ jobs:
             artifacts/flatpak/**
             artifacts/android-apk/streambooru.apk
 
-      - name: Create/Update GitHub Release (auto-generated notes)
-        if: steps.extract.outputs.found != 'true'
+      - name: Create/Update GitHub Release (auto-generated notes only)
+        if: steps.body.outputs.found != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}

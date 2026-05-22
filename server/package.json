@@ -7,7 +7,7 @@
   "scripts": {
     "start": "bun src/index.js",
     "migrate": "bun src/migrate.js",
-    "start:prod": "bun run migrate && (test -d webapp || cp -r ../renderer webapp 2>/dev/null || true) && bun run start"
+    "start:prod": "bun run migrate && bun run start"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
