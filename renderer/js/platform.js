@@ -20,17 +20,39 @@
   function isMobileWeb() {
     return isWebBrowser() && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
   }
+  function buildDiscordLoginUrl() {
+    const acc = accLoad();
+    let base = accGetBase(acc);
+    if (!base && isWebBrowser()) {
+      base = defaultOriginBase();
+      if (base) { acc.serverBase = base; accSave(acc); }
+    }
+    if (!base) return { ok: false, error: 'No server selected' };
+    const url = `${base}/auth/discord?redirect_uri=${encodeURIComponent(webOAuthRedirect())}`;
+    return { ok: true, url, base };
+  }
   function openWebOAuth(url) {
-    // Popup keeps StreamBooru open; avoids Discord desktop app swallowing the redirect
+    // Must open the window synchronously on click — async breaks popup blockers.
     if (isWebBrowser() && !isMobileWeb()) {
-      const popup = window.open(url, 'streambooru_oauth', 'popup=yes,width=520,height=720,resizable=yes,scrollbars=yes');
+      const popup = window.open('about:blank', 'streambooru_oauth', 'popup=yes,width=520,height=720,resizable=yes,scrollbars=yes');
       if (popup) {
-        try { popup.focus(); } catch {}
-        return { ok: true, pending: true, mode: 'popup', popup };
+        try {
+          popup.location.href = url;
+          popup.focus();
+          return { ok: true, pending: true, mode: 'popup', popup };
+        } catch {
+          try { popup.close(); } catch {}
+        }
       }
     }
-    window.location.href = url;
+    window.location.assign(url);
     return { ok: true, pending: true, mode: 'redirect' };
+  }
+  function accountBeginDiscordLogin() {
+    const built = buildDiscordLoginUrl();
+    if (!built.ok) return built;
+    if (!isWebBrowser()) return { ok: false, error: 'Not supported in this client' };
+    return openWebOAuth(built.url);
   }
 
   // native HTTP
@@ -994,32 +1016,38 @@
         return { ok: true, user: acc.user || null };
       },
       accountLoginDiscord: async () => {
+        if (isWebBrowser()) return accountBeginDiscordLogin();
         const acc = accLoad();
         let base = accGetBase(acc);
-        if (!base && isWebBrowser()) {
-          base = defaultOriginBase();
-          if (base) { acc.serverBase = base; accSave(acc); }
-        }
         if (!base) return { ok: false, error: 'No server selected' };
-        if (isWebBrowser()) {
-          const url = `${base}/auth/discord?redirect_uri=${encodeURIComponent(webOAuthRedirect())}`;
-          return openWebOAuth(url);
-        }
         const deepLink = 'streambooru://oauth/discord';
         await window.Platform.openExternal(`${base}/auth/discord?redirect_uri=${encodeURIComponent(deepLink)}`);
         return { ok: true, pending: true };
       },
+      accountBeginDiscordLogin: () => accountBeginDiscordLogin(),
       accountLinkDiscord: async () => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base || !acc.token) return { ok: false, error: 'Not logged in' };
         try {
           const next = isWebBrowser() ? webOAuthRedirect() : 'streambooru://oauth/linked';
+          let popup = null;
+          if (isWebBrowser() && !isMobileWeb()) {
+            popup = window.open('about:blank', 'streambooru_oauth', 'popup=yes,width=520,height=720,resizable=yes,scrollbars=yes');
+          }
           const start = await httpGetJSON(`${base}/api/link/discord/start?next=${encodeURIComponent(next)}`, { Authorization: `Bearer ${acc.token}` });
           if (start?.ok && start.url) {
-            if (isWebBrowser()) return openWebOAuth(start.url);
+            if (isWebBrowser()) {
+              if (popup) {
+                try { popup.location.href = start.url; popup.focus(); return { ok: true, pending: true, mode: 'popup', popup }; }
+                catch { try { popup.close(); } catch {} }
+              }
+              window.location.assign(start.url);
+              return { ok: true, pending: true, mode: 'redirect' };
+            }
             await window.Platform.openExternal(start.url);
             return { ok: true, pending: true };
           }
+          if (popup) { try { popup.close(); } catch {} }
           return { ok: false, error: 'Server refused link start' };
         } catch (e) { return { ok: false, error: String(e?.message || e) }; }
       },

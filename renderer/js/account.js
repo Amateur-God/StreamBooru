@@ -118,7 +118,7 @@
     // oauth/link/logout
     const rowDiscord = h('div', { className: 'actions-row' });
     const btnLinkDiscord = h('button', { className: 'link-btn', text: 'Link Discord' });
-    const btnLoginDiscord = h('button', { className: 'link-btn', text: 'Login with Discord' });
+    const btnLoginDiscord = h('button', { className: 'link-btn', type: 'button', text: 'Login with Discord' });
     const btnUnlinkDiscord = h('button', { className: 'link-btn', text: 'Unlink Discord' });
     const btnLogout = h('button', { className: 'link-btn', text: 'Logout' });
     const linkBadge = h('span', { className: 'badge muted', text: '' });
@@ -302,28 +302,51 @@
       } finally { btnUnlinkDiscord.disabled = false; await refresh(); }
     });
 
-    btnLoginDiscord.addEventListener('click', async () => {
+    btnLoginDiscord.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      btnLoginDiscord.disabled = true;
       try {
-        btnLoginDiscord.disabled = true;
-        const res = await window.api.accountLoginDiscord?.();
-        if (!res?.ok) alert('Login failed' + (res?.error ? `: ${res.error}` : ''));
-        else {
-          const onWeb = typeof window !== 'undefined'
-            && window.location.pathname.startsWith('/app')
-            && !navigator.userAgent.includes('Electron');
-          if (onWeb) {
-            if (res.mode === 'popup') {
-              alert('Complete sign-in in the popup window. If the Discord app opened instead, authorize there then check for the popup or this tab.');
-            }
-            try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
-            stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 120000, intervalMs: 1500 });
-          } else {
-            alert('Follow the browser flow; you’ll return to the app automatically.');
-            try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
-            stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 60000, intervalMs: 1500 });
+        const onWeb = typeof window !== 'undefined'
+          && window.location.pathname.startsWith('/app')
+          && !navigator.userAgent.includes('Electron');
+        const res = onWeb
+          ? (window.api.accountBeginDiscordLogin?.() || { ok: false, error: 'Login unavailable' })
+          : null;
+        if (onWeb) {
+          if (!res?.ok) {
+            alert('Login failed' + (res?.error ? `: ${res.error}` : ''));
+            btnLoginDiscord.disabled = false;
+            return;
           }
+          if (res.mode === 'popup') {
+            status.textContent = 'Complete sign-in in the popup window…';
+          } else {
+            status.textContent = 'Redirecting to Discord…';
+          }
+          try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
+          stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 120000, intervalMs: 1500 });
+          btnLoginDiscord.disabled = false;
+          return;
         }
-      } finally { btnLoginDiscord.disabled = false; await refresh(); }
+        (async () => {
+          try {
+            const asyncRes = await window.api.accountLoginDiscord?.();
+            if (!asyncRes?.ok) alert('Login failed' + (asyncRes?.error ? `: ${asyncRes.error}` : ''));
+            else {
+              alert('Follow the browser flow; you’ll return to the app automatically.');
+              try { if (typeof stopAccountWatch === 'function') stopAccountWatch(); } catch {}
+              stopAccountWatch = startAccountWatch({ stopWhenLoggedIn: true, maxMs: 60000, intervalMs: 1500 });
+            }
+          } finally {
+            btnLoginDiscord.disabled = false;
+            await refresh();
+          }
+        })();
+      } catch (err) {
+        alert('Login failed: ' + (err?.message || err));
+        btnLoginDiscord.disabled = false;
+      }
     });
 
     btnLogout.addEventListener('click', async () => {
