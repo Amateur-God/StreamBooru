@@ -133,8 +133,3 @@ dist
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
-
-# Proprietary AtlasAnalytics bundle (maintained outside the public OSS tree)
-/private/
-/renderer/analytics-private/
-/server/src/_analytics_private/

@@ -14,13 +14,7 @@ cmds = [
 cmds = ['cd server && bun install --ignore-scripts']
 
 [phases.build]
-cmds = [
-  'bash scripts/clone-atlas-analytics.sh',
-  'node scripts/merge-private-analytics.mjs',
-  'bash scripts/install-analytics-server-deps.sh',
-  'node scripts/vendor-analytics.mjs || true',
-  'rm -rf server/webapp && cp -r renderer server/webapp'
-]
+cmds = ['rm -rf server/webapp && cp -r renderer server/webapp']
 
 [start]
 cmd = 'cd server && bun run start:prod'

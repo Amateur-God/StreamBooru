@@ -48,20 +48,6 @@
   function getHttp() { return C?.Plugins?.CapacitorHttp || C?.Plugins?.Http || null; }
   function originFrom(url) { try { return new URL(url).origin; } catch { return ''; } }
   const b64 = (s) => { try { return typeof btoa === 'function' ? btoa(s) : Buffer.from(s, 'utf8').toString('base64'); } catch { return s; } };
-  async function authAnalyticsPayload() {
-    if (!isWebBrowser()) return {};
-    try {
-      if (window.SBAnalytics?.getLoginPayload) return await window.SBAnalytics.getLoginPayload();
-    } catch {}
-    return {};
-  }
-  async function afterAuthAnalytics(method, token, base) {
-    if (!isWebBrowser()) return;
-    try {
-      window.SBAnalytics?.setAuthToken?.(token);
-      await window.SBAnalytics?.linkAfterAuth?.(method, token, base);
-    } catch {}
-  }
 
   // Tiny event bus used by renderer
   const Events = (() => {
@@ -878,7 +864,6 @@
     accSave(acc);
     openSse();
     window.events?.emitAccountChanged?.();
-    try { await afterAuthAnalytics('discord', token, base); } catch {}
     try { await (window.api?.syncOnLogin?.()); } catch {}
   }
 
@@ -924,9 +909,8 @@
             else accSave(acc);
             openSse();
             window.events?.emitAccountChanged?.();
-            try { await afterAuthAnalytics('discord', token, base); } catch {}
             api.syncOnLogin?.();
-          }).catch(async ()=>{ accSave(acc); openSse(); window.events?.emitAccountChanged?.(); try { await afterAuthAnalytics('discord', token, base); } catch {} api.syncOnLogin?.(); });
+          }).catch(async ()=>{ accSave(acc); openSse(); window.events?.emitAccountChanged?.(); api.syncOnLogin?.(); });
         } else {
           accSave(acc);
           openSse();
@@ -1054,12 +1038,11 @@
       accountRegister: async (username, password) => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base) return { ok: false, error: 'No server selected' };
-        const analytics = await authAnalyticsPayload();
 
-        let { status, json } = await httpPostJSON(`${base}/auth/local/register`, { username, password, ...analytics });
+        let { status, json } = await httpPostJSON(`${base}/auth/local/register`, { username, password });
         if (status >= 400 || !json?.token) {
           const auth = 'Basic ' + b64(`${username}:${password}`);
-          ({ status, json } = await httpPostJSON(`${base}/auth/local/register`, { ...analytics }, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
+          ({ status, json } = await httpPostJSON(`${base}/auth/local/register`, {}, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
         }
         if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Register failed' };
 
@@ -1068,19 +1051,17 @@
         accSave(acc);
         openSse();
         window.events?.emitAccountChanged?.();
-        await afterAuthAnalytics('register', acc.token, base);
         await api.syncOnLogin();
         return { ok: true, user: acc.user || null };
       },
       accountLoginLocal: async (username, password) => {
         const acc = accLoad(); const base = accGetBase(acc);
         if (!base) return { ok: false, error: 'No server selected' };
-        const analytics = await authAnalyticsPayload();
 
-        let { status, json } = await httpPostJSON(`${base}/auth/local/login`, { username, password, ...analytics });
+        let { status, json } = await httpPostJSON(`${base}/auth/local/login`, { username, password });
         if (status >= 400 || !json?.token) {
           const auth = 'Basic ' + b64(`${username}:${password}`);
-          ({ status, json } = await httpPostJSON(`${base}/auth/local/login`, { ...analytics }, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
+          ({ status, json } = await httpPostJSON(`${base}/auth/local/login`, {}, { Authorization: auth, 'X-Username': username, 'X-Password': password }));
         }
         if (status >= 400 || !json?.token) return { ok: false, error: json?.error || 'Login failed' };
 
@@ -1089,7 +1070,6 @@
         accSave(acc);
         openSse();
         window.events?.emitAccountChanged?.();
-        await afterAuthAnalytics('local', acc.token, base);
         await api.syncOnLogin();
         return { ok: true, user: acc.user || null };
       },

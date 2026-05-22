@@ -12,8 +12,6 @@ const fs = require('fs');
 const { query, pool } = require('./db');
 const { enc, dec } = require('./crypto');
 const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitize');
-const { attachAnalytics, getPublicAnalyticsConfig, handleAuthAnalytics } = require('./analytics');
-
 const app = express();
 app.set('trust proxy', true);
 
@@ -42,7 +40,6 @@ app.use((req, res, next) => {
 
 /* request log */
 app.use((req, _res, next) => { try { console.log(`${req.method} ${req.url}`); } catch {} next(); });
-app.use(attachAnalytics);
 
 /* ---------- config ---------- */
 const PORT = Number(process.env.PORT || 3000);
@@ -188,7 +185,6 @@ app.post('/auth/local/register', async (req, res) => {
       [id, username, created_at, hash]);
 
     const token = signToken({ id, username, avatar: '' });
-    await handleAuthAnalytics(req, { id, username }, b, 'register');
     res.json({ ok: true, token });
   } catch (e) {
     console.error('Register error:', e?.message || e);
@@ -218,7 +214,6 @@ app.post('/auth/local/login', async (req, res) => {
     if (!ok) return res.status(401).json({ ok: false, error: 'invalid credentials' });
 
     const token = signToken({ id: row.id, username: row.username, avatar: row.avatar || '' });
-    await handleAuthAnalytics(req, { id: row.id, username: row.username, name: row.username }, b, 'local');
     res.json({ ok: true, token });
   } catch (e) {
     console.error('Login error:', e?.message || e);
@@ -343,37 +338,6 @@ app.post('/auth/discord/unlink', auth, async (req, res) => {
 });
 
 /* ---------- user/me ---------- */
-app.get('/api/analytics/config', (_req, res) => {
-  res.json({ ok: true, ...getPublicAnalyticsConfig() });
-});
-
-app.post('/api/analytics/identify', auth, async (req, res) => {
-  try {
-    const b = bodyObj(req);
-    const r = await query('SELECT id, username, avatar FROM users WHERE id = $1', [req.user.id]);
-    const user = r.rows[0] || { id: req.user.id, username: req.user.name || '' };
-    await handleAuthAnalytics(req, user, { ...b, source: b.source || 'post_login' }, String(b.auth_method || b.authMethod || 'post_login'));
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('Analytics identify error:', e?.message || e);
-    res.status(500).json({ ok: false, error: 'analytics error' });
-  }
-});
-
-app.post('/api/account/consent', auth, async (req, res) => {
-  try {
-    const b = bodyObj(req);
-    const r = await query('SELECT id, username FROM users WHERE id = $1', [req.user.id]);
-    const user = r.rows[0];
-    if (!user) return res.status(404).json({ ok: false, error: 'user not found' });
-    await req.analytics.recordAccountConsent(user, b, String(b.source || 'account_sync'));
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('Account consent sync error:', e?.message || e);
-    res.status(500).json({ ok: false, error: 'consent sync error' });
-  }
-});
-
 app.get('/api/me', auth, async (req, res) => {
   const r = await query('SELECT id, username, avatar, discord_id FROM users WHERE id = $1', [req.user.id]);
   const u = r.rows[0] || { id: req.user.id, username: req.user.name, avatar: '' };
@@ -805,13 +769,6 @@ if (fs.existsSync(publicDir)) {
     if (fs.existsSync(page)) return res.sendFile(page);
     res.status(404).send('OAuth callback page missing');
   });
-  for (const legal of ['privacy-policy', 'terms', 'cookie-policy']) {
-    app.get(`/${legal}`, (_req, res) => {
-      const page = path.join(publicDir, `${legal}.html`);
-      if (fs.existsSync(page)) return res.sendFile(page);
-      res.status(404).send('Not found');
-    });
-  }
 }
 
 const webRoot = webAppRoot();

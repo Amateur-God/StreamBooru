@@ -1,8 +1,4 @@
 (function () {
-  const isWebHostedAnalytics = () => window.SBWebAnalytics?.enabled?.() !== false
-    && !navigator.userAgent.includes('Electron')
-    && !(window.Capacitor?.getPlatform?.() === 'android');
-
   // elements
   function h(tag, attrs = {}, children = []) {
     const el = document.createElement(tag);
@@ -114,13 +110,6 @@
 
     // local login
     const rowLocal = h('div', { className: 'fields-row' });
-    const loginAnalyticsNotice = isWebHostedAnalytics()
-      ? (() => {
-        const notice = h('p', { className: 'login-analytics-notice', hidden: '' });
-        notice.setAttribute('data-login-analytics-disclosure', '');
-        return notice;
-      })()
-      : null;
     const userInput = mkInput('Username', 'text');
     const passInput = mkInput('Password', 'password');
     const btnLoginLocal = h('button', { className: 'link-btn', text: 'Login (Local)' });
@@ -147,7 +136,6 @@
     card.appendChild(status);
     card.appendChild(serverRow);
     card.appendChild(rowRegister);
-    if (loginAnalyticsNotice) card.appendChild(loginAnalyticsNotice);
     card.appendChild(rowLocal);
     card.appendChild(rowDiscord);
     card.appendChild(rowInfo);
@@ -267,7 +255,6 @@
     btnRegister.addEventListener('click', async () => {
       try {
         btnRegister.disabled = true;
-        if (isWebHostedAnalytics()) window.SBAnalytics?.trackEvent?.('register_form_started', { form: 'account_modal' });
         const u = regUser.value.trim();
         const p = regPass.value;
         if (!u || !p) { alert('Enter username and password'); return; }
@@ -281,7 +268,6 @@
     btnLoginLocal.addEventListener('click', async () => {
       try {
         btnLoginLocal.disabled = true;
-        if (isWebHostedAnalytics()) window.SBAnalytics?.trackEvent?.('login_form_started', { form: 'account_modal' });
         const u = userInput.value.trim();
         const p = passInput.value;
         if (!u || !p) { alert('Enter username and password'); return; }
@@ -375,11 +361,6 @@
     });
 
     await refresh();
-    if (loginAnalyticsNotice) {
-      const syncLoginDisclosure = () => window.SBAnalytics?.updateLoginDisclosure?.(loginAnalyticsNotice);
-      syncLoginDisclosure();
-      window.SBConsent?.onConsentChange?.(syncLoginDisclosure);
-    }
     setTimeout(() => panel.focus(), 0);
   }
 
