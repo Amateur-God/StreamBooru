@@ -4,10 +4,8 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { EventEmitter } = require('events');
-const { exec } = require('child_process');
-const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
+const { Readable } = require('stream');
 const crypto = require('crypto');
-const path = require('path');
 
 const { query, pool } = require('./db');
 const { enc, dec } = require('./crypto');
@@ -605,7 +603,8 @@ app.get('/imgproxy', async (req, res) => {
     res.setHeader('Content-Type', ct);
     res.setHeader('Cache-Control', 'public, max-age=86400');
 
-    r.body.pipe(res);
+    if (r.body) Readable.fromWeb(r.body).pipe(res);
+    else res.end(Buffer.from(await r.arrayBuffer()));
   } catch (e) {
     console.error('imgproxy error', e);
     res.status(500).end('proxy error');

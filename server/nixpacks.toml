@@ -1,0 +1,17 @@
+# StreamBooru sync server — Coolify / Nixpacks (Bun runtime)
+# Set Coolify "Base Directory" to: server
+
+[phases.setup]
+nixPkgs = ['curl', 'unzip']
+aptPkgs = ['build-essential']
+cmds = [
+    "curl -fsSL https://bun.sh/install | bash",
+    "cp /root/.bun/bin/bun /usr/bin/bun",
+    "chmod +x /usr/bin/bun"
+]
+
+[phases.install]
+cmds = ['bun install --ignore-scripts']
+
+[start]
+cmd = 'bun run start:prod'

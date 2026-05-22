@@ -297,6 +297,25 @@
       return isNaN(d.getTime()) ? '' : d.toISOString();
     } catch { return ''; }
   }
+  function ratingToTag(rating) {
+    switch ((rating || '').toLowerCase()) {
+      case 'safe': return 'rating:safe';
+      case 'questionable': return 'rating:questionable';
+      case 'explicit': return 'rating:explicit';
+      default: return '';
+    }
+  }
+  function buildQueryTags(site, ...extras) {
+    const parts = [ratingToTag(site?.rating), String(site?.tags || '').trim(), ...(extras || [])]
+      .filter(Boolean)
+      .join(' ')
+      .trim()
+      .split(/\s+/);
+    const seen = new Set();
+    const out = [];
+    for (const t of parts) if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+    return out.join(' ');
+  }
   function hasRatingSpecifier(tags) { return /\brating\s*:(?:safe|questionable|explicit|any|[sqe])\b/i.test(String(tags || '')); }
   function addRatingToken(tags, ratingVal) {
     const token = ratingVal === 'questionable' ? 'rating:questionable'
@@ -461,11 +480,10 @@
     const baseUrl = site.baseUrl;
     const page = typeof cursor === 'number' && cursor > 0 ? cursor : 1;
 
-    let tags = (search || '').trim();
-    if (viewType === 'popular') {
-      const pop = popularTagFor(site.type);
-      tags = tags ? `${pop} ${tags}` : pop;
-    }
+    const extras = [];
+    if (viewType === 'popular') extras.push(popularTagFor(site.type));
+    if ((search || '').trim()) extras.push((search || '').trim());
+    let tags = buildQueryTags(site, ...extras);
 
     const ratingPref = String(site.rating || '').toLowerCase();
     let injectedRating = '';

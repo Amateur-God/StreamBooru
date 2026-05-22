@@ -20,6 +20,8 @@ modules:
     build-options:
       env:
         PATH: /usr/lib/sdk/node20/bin:$PATH
+      build-args:
+        - --share=network
     build-commands:
       - npm ci
       - npx electron-builder --linux dir --config electron-builder.yml

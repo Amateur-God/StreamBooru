@@ -17,7 +17,9 @@
     "android:sync": "npx cap sync android",
     "android:open": "npx cap open android",
     "android:build": "cd android && ./gradlew assembleDebug",
-    "android:release": "cd android && ./gradlew bundleRelease"
+    "android:release": "cd android && ./gradlew bundleRelease",
+    "test:tags": "node scripts/test-query-tags.js",
+    "test:server": "node scripts/test-server-smoke.js"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.2.1",
