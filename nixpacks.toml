@@ -15,7 +15,7 @@ cmds = ['cd server && bun install --ignore-scripts']
 
 [phases.build]
 cmds = [
-  'if [ -n "$ATLAS_ANALYTICS_REPO" ]; then rm -rf private/atlas-analytics && git clone --depth 1 "$ATLAS_ANALYTICS_REPO" private/atlas-analytics; fi',
+  'bash scripts/clone-atlas-analytics.sh',
   'node scripts/merge-private-analytics.mjs',
   'bash scripts/install-analytics-server-deps.sh',
   'node scripts/vendor-analytics.mjs || true',
