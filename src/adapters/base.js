@@ -19,6 +19,25 @@ function abs(baseUrl, url) {
   return url;
 }
 
+function isVideoUrl(url) {
+  if (!url) return false;
+  try {
+    const path = new URL(url, 'https://x/').pathname.toLowerCase();
+    return /\.(mp4|webm|mov|m4v)$/i.test(path);
+  } catch {
+    return /\.(mp4|webm|mov|m4v)$/i.test(String(url).toLowerCase());
+  }
+}
+
+/** First URL that is not a video file (safe for &lt;img&gt; thumbnails). */
+function pickStaticImageUrl(...urls) {
+  for (const u of urls) {
+    const s = String(u || '').trim();
+    if (s && !isVideoUrl(s)) return s;
+  }
+  return '';
+}
+
 function ratingToTag(rating) {
   switch ((rating || '').toLowerCase()) {
     case 'safe': return 'rating:safe';
@@ -44,24 +63,30 @@ function buildQueryTags(site, ...extras) {
 function normalizePost({
   id, created_at, score, favorites,
   preview_url, sample_url, file_url,
-  width, height, tags, rating, source, post_url, site
+  width, height, tags, rating, source, post_url, site,
+  grid_video_url, is_video
 }) {
+  const staticPreview = pickStaticImageUrl(preview_url, sample_url, file_url);
+  const sample = sample_url || file_url || '';
+  const file = file_url || sample_url || preview_url || '';
   return {
     id: String(id),
     created_at: toIsoDate(created_at) || null,
     score: typeof score === 'number' ? score : score ? Number(score) || 0 : 0,
     favorites: typeof favorites === 'number' ? favorites : favorites ? Number(favorites) || 0 : 0,
-    preview_url: preview_url || sample_url || file_url || '',
-    sample_url: sample_url || file_url || '',
-    file_url: file_url || sample_url || preview_url || '',
+    preview_url: staticPreview || '',
+    sample_url: sample,
+    file_url: file,
     width: width ? Number(width) : null,
     height: height ? Number(height) : null,
     tags: Array.isArray(tags) ? tags : typeof tags === 'string' ? tags.split(/\s+/).filter(Boolean) : [],
     rating: rating || '',
     source: source || '',
     post_url,
-    site
+    site,
+    grid_video_url: grid_video_url || '',
+    is_video: !!is_video
   };
 }
 
-module.exports = { normalizePost, toIsoDate, abs, buildQueryTags, ratingToTag };
+module.exports = { normalizePost, toIsoDate, abs, buildQueryTags, ratingToTag, isVideoUrl, pickStaticImageUrl };

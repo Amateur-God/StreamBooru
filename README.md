@@ -1,5 +1,9 @@
 # 🌊 StreamBooru
 
+[![CI](https://github.com/Atlas-Commons/StreamBooru/actions/workflows/ci.yml/badge.svg)](https://github.com/Atlas-Commons/StreamBooru/actions/workflows/ci.yml)
+
+Contributions welcome — see [CONTRIBUTING.md](.github/CONTRIBUTING.md). PRs require DCO sign-off (`git commit -s`).
+
 Welcome to StreamBooru! Your slick, fast desktop gateway to the vast world of booru image boards. Dive into content from multiple sites all in one place.
 
 StreamBooru elegantly merges posts from various engines like Danbooru, Gelbooru, Moebooru (Yande.re/Konachan), e621/e926, and Derpibooru. Enjoy seamless browsing, cross-site searching, a handy lightbox viewer, bulk downloading, and your own local favorites collection.
@@ -69,14 +73,14 @@ Choose the easiest method for your system:
 This command downloads the latest release and installs the best package for your Linux distribution (Deb → Flatpak → tar.gz), adding a launcher and the `streambooru` command.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Amateur-God/StreamBooru/HEAD/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Atlas-Commons/StreamBooru/HEAD/scripts/install.sh | bash
 ```
 
 *(See the script or full docs for options like installing specific versions or forks.)*
 
 ### 2) Debian / Ubuntu (.deb)
 
-1.  Download the `.deb` file from the [Releases page](https://github.com/Amateur-God/StreamBooru/releases).
+1.  Download the `.deb` file from the [Releases page](https://github.com/Atlas-Commons/StreamBooru/releases).
 2.  Install it:
 
     ```bash
@@ -85,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/Amateur-God/StreamBooru/HEAD/script
 
 ### 3) Windows (.exe)
 
-1.  Download the `StreamBooru-Setup-<version>.exe` from the [Releases page](https://github.com/Amateur-God/StreamBooru/releases).
+1.  Download the `StreamBooru-Setup-<version>.exe` from the [Releases page](https://github.com/Atlas-Commons/StreamBooru/releases).
 2.  Run the installer (it's a simple One-Click setup).
 3.  Launch StreamBooru from your Start Menu.
 
@@ -119,7 +123,7 @@ makepkg -si
 
 ### 6) Generic Linux (tar.gz)
 
-1.  Download `StreamBooru-*-linux-x64.tar.gz` from the [Releases page](https://github.com/Amateur-God/StreamBooru/releases).
+1.  Download `StreamBooru-*-linux-x64.tar.gz` from the [Releases page](https://github.com/Atlas-Commons/StreamBooru/releases).
 2.  Extract and run:
     ```bash
     tar xf StreamBooru-*-linux-x64.tar.gz

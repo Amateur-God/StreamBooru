@@ -39,7 +39,7 @@ No install required — browse directly on the sync server:
 
 ## Downloads
 
-Grab builds from the [v1.1.0-beta.1 release](https://github.com/Amateur-God/StreamBooru/releases/tag/v1.1.0-beta.1):
+Grab builds from the [v1.1.0-beta.1 release](https://github.com/Atlas-Commons/StreamBooru/releases/tag/v1.1.0-beta.1):
 
 | Platform | Artifact |
 |----------|----------|

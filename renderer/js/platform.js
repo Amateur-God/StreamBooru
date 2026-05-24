@@ -230,7 +230,8 @@
       if (h.endsWith('tbib.org')) return 'https://tbib.org';
       if (h.endsWith('gelbooru.com')) return 'https://gelbooru.com';
       if (h.endsWith('safebooru.org')) return 'https://safebooru.org';
-      if (h.endsWith('e621.net') || h.endsWith('e926.net')) return 'https://e621.net';
+      if (h.endsWith('e621.net') || h.endsWith('e621.media')) return 'https://e621.net';
+      if (h.endsWith('e926.net') || h.endsWith('e926.media')) return 'https://e926.net';
       if (h.endsWith('derpicdn.net') || h.endsWith('derpibooru.org')) return 'https://derpibooru.org';
       return '';
     } catch { return ''; }
@@ -659,6 +660,120 @@
     }
   }
 
+  function mediaproxyUrl(url, { download = false, filename = '' } = {}) {
+    const base = webProxyBase();
+    if (!base) return '';
+    const q = new URLSearchParams({ url });
+    q.set('accept', 'image/*,video/*,application/octet-stream,*/*');
+    if (download) {
+      q.set('download', '1');
+      if (filename) q.set('filename', filename);
+    }
+    return `${base}/mediaproxy?${q.toString()}`;
+  }
+
+  async function fetchMediaBlob(url) {
+    const needsProxy = isWebBrowser() || isAndroid();
+    const proxy = needsProxy ? mediaproxyUrl(url) : '';
+    const fetchUrl = proxy || url;
+    const Http = getHttp();
+    if (isAndroid() && Http?.get) {
+      const res = await Http.get({
+        url: fetchUrl,
+        responseType: 'arraybuffer',
+        headers: { Accept: 'image/*,video/*,application/octet-stream,*/*', 'User-Agent': UA },
+        readTimeout: 120000,
+        connectTimeout: 30000
+      });
+      const status = res.status ?? 0;
+      if (status < 200 || status >= 300) throw new Error(`HTTP ${status}`);
+      const mime = guessMime(url);
+      return new Blob([res.data], { type: mime });
+    }
+    const r = await fetch(fetchUrl, { headers: { Accept: 'image/*,video/*,application/octet-stream,*/*' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.blob();
+  }
+
+  async function triggerBlobDownload(blob, filename) {
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = String(filename || 'download').replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').slice(0, 200);
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 60_000);
+  }
+
+  async function downloadMediaWeb({ url, fileName, siteName }) {
+    if (isElectron() && window.api?.downloadImage) {
+      return window.api.downloadImage({ url, siteName, fileName });
+    }
+    const safeName = String(fileName || 'download').replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').slice(0, 200);
+    try {
+      const blob = await fetchMediaBlob(url);
+      if (C?.Plugins?.Filesystem?.writeFile) {
+        if (typeof C.Plugins.Filesystem.requestPermissions === 'function') {
+          try {
+            const perm = await C.Plugins.Filesystem.requestPermissions();
+            const ok = perm.publicStorage === 'granted' || perm.publicStorage === 'limited';
+            if (!ok) return { ok: false, error: 'Storage permission denied' };
+          } catch {}
+        }
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        await C.Plugins.Filesystem.writeFile({
+          path: `Pictures/StreamBooru/${safeName}`,
+          data: b64(bin),
+          directory: 'EXTERNAL',
+          recursive: true
+        });
+        return { ok: true };
+      }
+      await triggerBlobDownload(blob, safeName);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  async function downloadBulkWeb(items, options = {}) {
+    if (isElectron() && window.api?.downloadBulk) {
+      return window.api.downloadBulk(items, options);
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return { ok: false, error: 'No items to download' };
+    }
+    if (isWebBrowser() && items.length > 1) {
+      const ok = window.confirm(`Download ${items.length} files? Your browser will save them one at a time.`);
+      if (!ok) return { ok: false, cancelled: true };
+    }
+    const concurrency = Number(options.concurrency || 3);
+    let index = 0;
+    let saved = 0;
+    const failed = [];
+    const worker = async () => {
+      while (true) {
+        const i = index++;
+        if (i >= items.length) return;
+        const it = items[i];
+        try {
+          const blob = await fetchMediaBlob(it.url);
+          await triggerBlobDownload(blob, it.fileName || `file_${i}`);
+          saved++;
+        } catch (e) {
+          failed.push({ i, error: String(e?.message || e) });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+    return { ok: true, saved, failed, basePath: '(browser downloads)' };
+  }
+
   // Account helpers for remote sync
   const ACC_KEY = 'sb_account_v1';
   function accLoad() { try { return JSON.parse(localStorage.getItem(ACC_KEY) || '{}'); } catch { return {}; } }
@@ -958,21 +1073,11 @@
     if (navigator.share) { const { title, text, url } = opts; await navigator.share({ title, text, url }); return true; }
     return false;
   }, saveImageFromUrl: async (url, filename = 'image.jpg') => {
+    const res = await downloadMediaWeb({ url, fileName: filename });
+    if (res?.ok) return true;
     if (isElectron() && window.api?.saveImage) return window.api.saveImage(url, filename);
-    if (C?.Plugins?.Filesystem?.writeFile) {
-      try {
-        if (typeof C.Plugins.Filesystem.requestPermissions === 'function') {
-          try { const perm = await C.Plugins.Filesystem.requestPermissions(); const ok = perm.publicStorage === 'granted' || perm.publicStorage === 'limited'; if (!ok) return false; } catch {}
-        }
-        const resp = await fetch(url); const blob = await resp.blob(); const buf = await blob.arrayBuffer();
-        const bytes = new Uint8Array(buf); let bin = ''; for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
-        const base64 = b64(bin);
-        await C.Plugins.Filesystem.writeFile({ path: `Pictures/StreamBooru/${filename}`, data: base64, directory: 'EXTERNAL', recursive: true });
-        return true;
-      } catch (e) { console.error('saveImageFromUrl error', e); return false; }
-    }
-    const a = document.createElement('a'); a.href = url; a.download = filename; a.rel = 'noopener'; a.click(); return true;
-  }, getVersion: async () => {
+    return false;
+  }, fetchMediaBlob, mediaproxyUrl, downloadMediaWeb, downloadBulkWeb, getVersion: async () => {
     if (isElectron() && window.api?.getVersion) return window.api.getVersion();
     if (C?.Plugins?.App?.getInfo) { try { const info = await C.Plugins.App.getInfo(); return info?.version || 'android'; } catch {} }
     return 'web';
@@ -987,11 +1092,9 @@
 
   (function ensureProxyHelpers() {
     window.api = window.api || {};
-    if (typeof window.api.proxyImage !== 'function') {
-      window.api.proxyImage = proxyImage;
-    } else {
-      window.api.proxyImage = proxyImage;
-    }
+    window.api.proxyImage = proxyImage;
+    window.api.fetchMediaBlob = fetchMediaBlob;
+    window.api.mediaproxyUrl = mediaproxyUrl;
     window.apiHostNeedsProxy = window.apiHostNeedsProxy || hostNeedsProxy;
   })();
 
@@ -1001,8 +1104,8 @@
       saveConfig: saveConfigWeb,
       fetchBooru: fetchBooruWeb,
       openExternal: window.Platform.openExternal,
-      downloadImage: async ({ url, fileName }) => window.Platform.saveImageFromUrl(url, fileName),
-      downloadBulk: undefined,
+      downloadImage: downloadMediaWeb,
+      downloadBulk: downloadBulkWeb,
       proxyImage,
       booruFavorite: async () => ({ ok: false, error: 'Not supported on Android build' }),
       authCheck: async () => ({ ok: true }),

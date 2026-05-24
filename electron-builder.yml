@@ -19,7 +19,7 @@ linux:
   target:
     - deb
     - tar.gz
-  maintainer: "Amateur-god <mrhowe95@gmail.com>"
+  maintainer: "Atlas Commons <mrhowe95@gmail.com>"
   vendor: "StreamBooru Project"
 
 deb:

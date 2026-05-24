@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="Amateur-God/StreamBooru"
+REPO="Atlas-Commons/StreamBooru"
 PREFIX="/usr/local"
 DEST_DIR="/opt/streambooru"
 WRAPPER="${PREFIX}/bin/streambooru"

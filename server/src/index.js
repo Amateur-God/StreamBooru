@@ -12,6 +12,13 @@ const fs = require('fs');
 const { query, pool } = require('./db');
 const { enc, dec } = require('./crypto');
 const { sanitizeSiteInput, sanitizeFavoriteKey, clampPost } = require('./sanitize');
+const {
+  isBooruHostAllowed,
+  isProxyAllowed,
+  refererFor,
+  refererHeadersFor,
+  BOORU_UA
+} = require('./refererFor');
 const app = express();
 app.set('trust proxy', true);
 
@@ -609,45 +616,9 @@ app.get('/api/stream', (req, res) => {
   send('hello', { ok: true, ts: Date.now() });
 });
 
-/* ---------- Image proxy ---------- */
-const BOORU_UA = 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36';
+/* ---------- Media proxy (images + video) ---------- */
 
-function isBooruHostAllowed(url) {
-  try {
-    const u = new URL(url);
-    const h = u.hostname.toLowerCase();
-    const okProto = u.protocol === 'https:' || u.protocol === 'http:';
-    const allow =
-      h.endsWith('donmai.us') ||
-      h === 'files.yande.re' || h.endsWith('yande.re') ||
-      h === 'konachan.com' || h === 'konachan.net' ||
-      h.endsWith('e621.net') || h.endsWith('e926.net') ||
-      h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
-      h.endsWith('gelbooru.com') || h.endsWith('safebooru.org') ||
-      h.endsWith('rule34.xxx') || h.endsWith('realbooru.com') || h.endsWith('xbooru.com') ||
-      h.endsWith('tbib.org') || h.endsWith('hypnohub.net');
-    return okProto && allow;
-  } catch { return false; }
-}
-
-function isProxyAllowed(url) { return isBooruHostAllowed(url); }
-function refererFor(url) {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    if (h.endsWith('donmai.us')) return 'https://danbooru.donmai.us';
-    if (h.endsWith('yande.re')) return 'https://yande.re';
-    if (h.endsWith('konachan.com')) return 'https://konachan.com';
-    if (h.endsWith('konachan.net')) return 'https://konachan.net';
-    if (h.endsWith('hypnohub.net')) return 'https://hypnohub.net';
-    if (h.endsWith('tbib.org')) return 'https://tbib.org';
-    if (h.endsWith('gelbooru.com')) return 'https://gelbooru.com';
-    if (h.endsWith('safebooru.org')) return 'https://safebooru.org';
-    if (h.endsWith('e621.net') || h.endsWith('e926.net')) return 'https://e621.net';
-    if (h.endsWith('derpicdn.net') || h.endsWith('derpibooru.org')) return 'https://derpibooru.org';
-    return '';
-  } catch { return ''; }
-}
-app.get('/imgproxy', async (req, res) => {
+async function proxyMediaRequest(req, res, { download = false, filename = '' } = {}) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Vary', 'Origin');
   try {
@@ -655,40 +626,14 @@ app.get('/imgproxy', async (req, res) => {
     if (!url || !isProxyAllowed(url)) return res.status(400).send('Bad url');
 
     const refParam = String(req.query.ref || '').trim();
+    const accept = String(req.query.accept || '').trim() ||
+      'image/avif,image/webp,image/apng,image/*,video/*,application/octet-stream,*/*;q=0.8';
 
     const hdr = {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Mobile Safari/537.36',
-      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+      'User-Agent': BOORU_UA,
+      Accept: accept,
+      ...refererHeadersFor(url, refParam)
     };
-
-    let refFinal = '';
-    if (refParam) {
-      try {
-        const u = new URL(refParam);
-        const h = u.hostname.toLowerCase();
-        const allowRef =
-          h.endsWith('donmai.us') ||
-          h.endsWith('yande.re') ||
-          h.endsWith('konachan.com') || h.endsWith('konachan.net') ||
-          h.endsWith('e621.net') || h.endsWith('e926.net') ||
-          h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
-          h.endsWith('gelbooru.com') || h.endsWith('safebooru.org') ||
-          h.endsWith('tbib.org') || h.endsWith('hypnohub.net') ||
-          h.endsWith('rule34.xxx') || h.endsWith('realbooru.com') || h.endsWith('xbooru.com');
-        if (allowRef) refFinal = u.toString();
-      } catch {}
-    }
-    if (!refFinal) refFinal = refererFor(url);
-
-    if (refFinal) {
-      try {
-        const o = new URL(refFinal);
-        hdr['Referer'] = refFinal;
-        hdr['Origin'] = `${o.protocol}//${o.host}`;
-      } catch {
-        hdr['Referer'] = refFinal;
-      }
-    }
 
     const r = await fetch(url, { headers: hdr });
     if (!r.ok) {
@@ -700,12 +645,25 @@ app.get('/imgproxy', async (req, res) => {
     res.setHeader('Content-Type', ct);
     res.setHeader('Cache-Control', 'public, max-age=86400');
 
+    if (download) {
+      const safeName = String(filename || 'download').replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').slice(0, 200);
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    }
+
     if (r.body) Readable.fromWeb(r.body).pipe(res);
     else res.end(Buffer.from(await r.arrayBuffer()));
   } catch (e) {
-    console.error('imgproxy error', e);
+    console.error('mediaproxy error', e);
     res.status(500).end('proxy error');
   }
+}
+
+app.get('/imgproxy', (req, res) => proxyMediaRequest(req, res));
+
+app.get('/mediaproxy', (req, res) => {
+  const download = String(req.query.download || '') === '1';
+  const filename = String(req.query.filename || '');
+  return proxyMediaRequest(req, res, { download, filename });
 });
 
 /* ---------- Booru API proxy (web browser CORS bypass) ---------- */
