@@ -1,4 +1,4 @@
-const { normalizePost, abs } = require('./base');
+const { normalizePost, abs, pickStaticImageUrl, isVideoUrl } = require('./base');
 
 // Derpibooru adapter (API: /api/v1/json/search/images)
 class DerpibooruAdapter {
@@ -24,7 +24,11 @@ class DerpibooruAdapter {
     const rep = img?.representations || {};
     const file = rep.full || img?.view_url || '';
     const sample = rep.large || rep.medium || file;
-    const preview = rep.thumb || rep.small || sample;
+    const previewPath = pickStaticImageUrl(rep.small, rep.medium, rep.large, rep.thumb) || pickStaticImageUrl(sample);
+    const isVideo = /^video\//.test(String(img?.mime_type || '')) || isVideoUrl(file);
+    const gridVideo = isVideo
+      ? (rep.thumb_small || rep.thumb || rep.small || file)
+      : '';
 
     const tagsArr = Array.isArray(img?.tags)
       ? img.tags
@@ -35,7 +39,7 @@ class DerpibooruAdapter {
       created_at: img.created_at,
       score: img.score ?? ((img.upvotes || 0) - (img.downvotes || 0)),
       favorites: img.faves ?? img.favorites ?? 0,
-      preview_url: abs(base, preview || ''),
+      preview_url: abs(base, previewPath || ''),
       sample_url: abs(base, sample || ''),
       file_url: abs(base, file || ''),
       width: img.width || null,
@@ -46,7 +50,9 @@ class DerpibooruAdapter {
         : (Array.isArray(tagsArr) && tagsArr.includes('questionable') ? 'questionable' : 'safe'),
       source: Array.isArray(img?.source_url) ? (img.source_url[0] || '') : (img.source_url || ''),
       post_url: `${base}/images/${img.id}`,
-      site: { name: site.name, type: site.type, baseUrl: site.baseUrl }
+      site: { name: site.name, type: site.type, baseUrl: site.baseUrl },
+      grid_video_url: abs(base, gridVideo || ''),
+      is_video: isVideo
     });
   }
 

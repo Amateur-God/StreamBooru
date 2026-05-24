@@ -30,10 +30,10 @@ The same SSH key can push to both packages if your AUR account owns them.
 
 ```bash
 # Stable
-./scripts/publish-aur.sh 1.0.2 Amateur-God StreamBooru streambooru-bin "'streambooru' 'streambooru-bin-beta'"
+./scripts/publish-aur.sh 1.0.2 Atlas-Commons StreamBooru streambooru-bin "'streambooru' 'streambooru-bin-beta'"
 
 # Beta
-./scripts/publish-aur.sh 1.1.0-beta.1 Amateur-God StreamBooru streambooru-bin-beta "'streambooru' 'streambooru-bin'" " (pre-release)"
+./scripts/publish-aur.sh 1.1.0-beta.1 Atlas-Commons StreamBooru streambooru-bin-beta "'streambooru' 'streambooru-bin'" " (pre-release)"
 ```
 
 Or use **Actions → Publish AUR (manual)** and pick stable or beta.

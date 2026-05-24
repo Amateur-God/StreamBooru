@@ -27,6 +27,7 @@ const Moebooru    = loadAdapter('moebooru');
 const Gelbooru    = loadAdapter('gelbooru');
 const E621        = loadAdapter('e621');
 const Derpibooru  = loadAdapter('derpibooru');
+const { refererHeadersFor, BOORU_UA } = require('../server/src/refererFor');
 
 let win;
 
@@ -41,8 +42,8 @@ function setupHotlinkHeaders(sess) {
       else if (host === 'files.yande.re') referer = 'https://yande.re/';
       else if (host === 'konachan.com') referer = 'https://konachan.com/';
       else if (host === 'konachan.net') referer = 'https://konachan.net/';
-      else if (host.endsWith('e621.net')) referer = 'https://e621.net/';
-      else if (host.endsWith('e926.net')) referer = 'https://e926.net/';
+      else if (host.endsWith('e621.net') || host.endsWith('e621.media')) referer = 'https://e621.net/';
+      else if (host.endsWith('e926.net') || host.endsWith('e926.media')) referer = 'https://e926.net/';
       else if (host.endsWith('derpicdn.net') || host.endsWith('derpibooru.org')) referer = 'https://derpibooru.org/';
       if (referer) headers['Referer'] = referer;
       headers['User-Agent'] = headers['User-Agent'] || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36 StreamBooru/Electron';
@@ -147,14 +148,15 @@ function removeLocalFavoriteKey(key) {
 
 /* http */
 function applyDefaultHeaders(request, url, headers = {}) {
+  const refHdr = refererHeadersFor(url);
   const h = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'User-Agent': BOORU_UA,
     Accept: '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
-    Referer: url,
+    ...refHdr,
     ...headers
   };
-  Object.entries(h).forEach(([k, v]) => request.setHeader(k, v));
+  Object.entries(h).forEach(([k, v]) => { if (v != null && v !== '') request.setHeader(k, v); });
 }
 function httpGetJson(url, headers = {}) {
   if (isDev) console.log('[GET]', url);
@@ -490,7 +492,7 @@ ipcMain.handle('download:bulk', async (_evt, payload) => {
         const outPath = path.join(targetDir, filename);
         await new Promise((resolve, reject) => {
           const req = net.request({ url: it.url, method: 'GET' });
-          req.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+          applyDefaultHeaders(req, it.url, {});
           const file = fs.createWriteStream(outPath);
           req.on('response', (res) => { res.pipe(file); res.on('end', resolve); res.on('error', reject); });
           req.on('error', reject); req.end();
@@ -514,7 +516,17 @@ ipcMain.handle('image:proxy', async (_evt, { url }) => {
       applyDefaultHeaders(req, url, {});
       const chunks = []; let contentType = 'image/jpeg';
       req.on('response', (res) => {
-        const ct = res.headers['content-type'] || res.headers['Content-Type']; if (ct) contentType = Array.isArray(ct) ? ct[0] : ct;
+        const status = res.statusCode || 0;
+        const ct = res.headers['content-type'] || res.headers['Content-Type'];
+        if (ct) contentType = Array.isArray(ct) ? ct[0] : ct;
+        if (status >= 400) {
+          resolve({ ok: false, error: `HTTP ${status}` });
+          return;
+        }
+        if (String(contentType).toLowerCase().startsWith('video/')) {
+          resolve({ ok: false, error: 'not_an_image' });
+          return;
+        }
         res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
         res.on('end', () => { const buf = Buffer.concat(chunks); resolve({ ok: true, dataUrl: `data:${contentType};base64,${buf.toString('base64')}` }); });
         res.on('error', (e) => resolve({ ok: false, error: String(e) }));

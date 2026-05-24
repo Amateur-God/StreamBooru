@@ -19,6 +19,9 @@
   };
 
   const isAndroid = () => !!(window.Platform && typeof window.Platform.isAndroid === 'function' && window.Platform.isAndroid());
+  const isElectron = () => !!(window.Platform && typeof window.Platform.isElectron === 'function' && window.Platform.isElectron());
+  const isWebBrowser = () => !isElectron() && !isAndroid();
+
   function isHotlinkHost(u) {
     try {
       const h = new URL(u).hostname;
@@ -27,6 +30,7 @@
         h === 'files.yande.re' ||
         h === 'konachan.com' || h === 'konachan.net' ||
         h.endsWith('e621.net') || h.endsWith('e926.net') ||
+        h.endsWith('e621.media') || h.endsWith('e926.media') ||
         h.endsWith('derpibooru.org') || h.endsWith('derpicdn.net') ||
         h.endsWith('gelbooru.com') || h.endsWith('safebooru.org') ||
         h.endsWith('rule34.xxx') || h.endsWith('realbooru.com') || h.endsWith('xbooru.com') ||
@@ -45,8 +49,58 @@
       } catch (_) {}
     };
     img.onerror = proxy;
-    if (isAndroid() && isHotlinkHost(url)) proxy();
+    if ((isAndroid() || isWebBrowser()) && isHotlinkHost(url)) proxy();
   };
+
+  async function setVideoWithFallback(vid, url, sourceEl) {
+    if (!url) return;
+    const needsProxy = (isAndroid() || isWebBrowser()) && isHotlinkHost(url);
+
+    const loadDirect = () => {
+      if (sourceEl) {
+        sourceEl.src = url;
+        const t = guessVideoType(url);
+        if (t) sourceEl.type = t;
+      } else {
+        vid.src = url;
+      }
+      try { vid.load(); } catch {}
+    };
+
+    const loadProxied = async () => {
+      try {
+        const blob = await window.api.fetchMediaBlob?.(url);
+        if (!blob) throw new Error('proxy unavailable');
+        const objUrl = URL.createObjectURL(blob);
+        vid._blobUrl = objUrl;
+        if (sourceEl) {
+          sourceEl.src = objUrl;
+          sourceEl.type = blob.type || guessVideoType(url) || 'video/mp4';
+        } else {
+          vid.src = objUrl;
+        }
+        try { vid.load(); } catch {}
+        const p = vid.play?.();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch (e) {
+        console.warn('video proxy fallback failed', e);
+        loadDirect();
+      }
+    };
+
+    if (needsProxy) {
+      await loadProxied();
+    } else {
+      loadDirect();
+    }
+
+    vid.addEventListener('error', () => {
+      if (!vid._proxyRetried && window.api?.fetchMediaBlob) {
+        vid._proxyRetried = true;
+        loadProxied();
+      }
+    }, { once: true });
+  }
 
   const pathFromUrl = function (u) {
     try {
@@ -77,6 +131,86 @@
     return tip;
   }
 
+  function createZoomController(viewport, mediaEl) {
+    const state = { scale: 1, tx: 0, ty: 0, dragging: false, lastX: 0, lastY: 0 };
+
+    const apply = () => {
+      mediaEl.style.transform = `translate(${state.tx}px, ${state.ty}px) scale(${state.scale})`;
+      viewport.classList.toggle('lb-zoomed', state.scale > 1.01);
+    };
+
+    const clampPan = () => {
+      const maxX = Math.max(0, (viewport.clientWidth * (state.scale - 1)) / 2);
+      const maxY = Math.max(0, (viewport.clientHeight * (state.scale - 1)) / 2);
+      state.tx = Math.max(-maxX, Math.min(maxX, state.tx));
+      state.ty = Math.max(-maxY, Math.min(maxY, state.ty));
+    };
+
+    const setScale = (next, originX, originY) => {
+      const prev = state.scale;
+      state.scale = Math.max(1, Math.min(4, next));
+      if (state.scale === 1) {
+        state.tx = 0;
+        state.ty = 0;
+      } else if (originX != null && originY != null && prev !== state.scale) {
+        const rect = viewport.getBoundingClientRect();
+        const cx = originX - rect.left - rect.width / 2;
+        const cy = originY - rect.top - rect.height / 2;
+        state.tx -= cx * (state.scale / prev - 1);
+        state.ty -= cy * (state.scale / prev - 1);
+        clampPan();
+      }
+      apply();
+    };
+
+    const reset = () => setScale(1);
+
+    viewport.addEventListener('wheel', (e) => {
+      if (mediaEl.tagName !== 'IMG') return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.15 : -0.15;
+      setScale(state.scale + delta, e.clientX, e.clientY);
+    }, { passive: false });
+
+    mediaEl.addEventListener('dblclick', (e) => {
+      if (mediaEl.tagName !== 'IMG') return;
+      e.preventDefault();
+      if (state.scale > 1.01) reset();
+      else setScale(2, e.clientX, e.clientY);
+    });
+
+    mediaEl.addEventListener('pointerdown', (e) => {
+      if (state.scale <= 1.01) return;
+      state.dragging = true;
+      state.lastX = e.clientX;
+      state.lastY = e.clientY;
+      mediaEl.setPointerCapture?.(e.pointerId);
+    });
+    mediaEl.addEventListener('pointermove', (e) => {
+      if (!state.dragging) return;
+      state.tx += e.clientX - state.lastX;
+      state.ty += e.clientY - state.lastY;
+      state.lastX = e.clientX;
+      state.lastY = e.clientY;
+      clampPan();
+      apply();
+    });
+    mediaEl.addEventListener('pointerup', () => { state.dragging = false; });
+    mediaEl.addEventListener('pointercancel', () => { state.dragging = false; });
+
+    return {
+      zoomIn: () => setScale(state.scale + 0.25),
+      zoomOut: () => setScale(state.scale - 0.25),
+      reset,
+      handleKey(key) {
+        if (key === '+' || key === '=') { zoomIn(); return true; }
+        if (key === '-' || key === '_') { zoomOut(); return true; }
+        if (key === '0') { reset(); return true; }
+        return false;
+      }
+    };
+  }
+
   const hasRemote = (post) => typeof window.hasRemoteFavoriteSupport === 'function' && window.hasRemoteFavoriteSupport(post);
   const toggleRemote = (post) => window.toggleRemoteFavoriteRemote?.(post);
 
@@ -84,7 +218,7 @@
     const f = post.file_url || '';
     const s = post.sample_url || '';
     const p = post.preview_url || '';
-    const hot = isAndroid() && (isHotlinkHost(f) || isHotlinkHost(s));
+    const hot = (isAndroid() || isWebBrowser()) && (isHotlinkHost(f) || isHotlinkHost(s));
     const order = hot ? [s, f, p] : [f, s, p];
     for (const u of order) if (u) return u;
     return '';
@@ -94,6 +228,11 @@
     const items = (typeof window.getGalleryItems === 'function') ? window.getGalleryItems() : [];
     if (!items || !items[index]) return;
     const post = items[index];
+
+    if (lb._blobUrl) {
+      try { URL.revokeObjectURL(lb._blobUrl); } catch {}
+      lb._blobUrl = null;
+    }
 
     lb.innerHTML = '';
     const content = document.createElement('div');
@@ -107,8 +246,12 @@
     const full = pickFullUrl(post);
     const isVid = isVideoUrl(full);
 
+    const viewport = document.createElement('div');
+    viewport.className = 'lb-viewport';
+
     let mediaEl;
     let tipEl = null;
+    let zoomCtl = null;
 
     if (isVid) {
       const mp4 = full.toLowerCase().endsWith('.mp4') || full.toLowerCase().endsWith('.m4v');
@@ -133,9 +276,6 @@
       if (post.preview_url) vid.poster = post.preview_url;
 
       const source = document.createElement('source');
-      source.src = full;
-      const t = guessVideoType(full);
-      if (t) source.type = t;
       vid.appendChild(source);
 
       const tryPlay = () => {
@@ -147,13 +287,14 @@
       if (!unsupported) {
         vid.addEventListener('canplay', tryPlay, { once: true });
         vid.addEventListener('loadeddata', tryPlay, { once: true });
-        vid.addEventListener('stalled', tryPlay);
-        vid.addEventListener('suspend', tryPlay);
         vid.addEventListener('click', () => {
           if (vid.paused) { tryPlay(); } else { vid.pause(); }
         });
+        setVideoWithFallback(vid, full, source).then(() => {
+          if (vid._blobUrl) lb._blobUrl = vid._blobUrl;
+        });
       } else {
-        tipEl = makeTip('This Electron/WebView cannot decode this video. Use “Open Media”.');
+        tipEl = makeTip('This environment cannot decode this video. Use “Open Media”.');
       }
 
       mediaEl = vid;
@@ -163,7 +304,10 @@
       setImageWithFallback(img, full);
       img.alt = post.tags?.join(' ') || '';
       mediaEl = img;
+      zoomCtl = createZoomController(viewport, img);
     }
+
+    viewport.appendChild(mediaEl);
 
     const toolbar = document.createElement('div');
     toolbar.className = 'toolbar';
@@ -203,6 +347,21 @@
       if (!res?.ok && !res?.cancelled) { alert('Download failed' + (res?.error ? `: ${res.error}` : '')); }
     });
 
+    if (zoomCtl) {
+      const zoomInBtn = document.createElement('button');
+      zoomInBtn.textContent = 'Zoom +';
+      zoomInBtn.addEventListener('click', () => zoomCtl.zoomIn());
+      const zoomOutBtn = document.createElement('button');
+      zoomOutBtn.textContent = 'Zoom −';
+      zoomOutBtn.addEventListener('click', () => zoomCtl.zoomOut());
+      const zoomResetBtn = document.createElement('button');
+      zoomResetBtn.textContent = 'Reset';
+      zoomResetBtn.addEventListener('click', () => zoomCtl.reset());
+      toolbar.appendChild(zoomInBtn);
+      toolbar.appendChild(zoomOutBtn);
+      toolbar.appendChild(zoomResetBtn);
+    }
+
     let remoteBtn = null;
     if (hasRemote(post)) {
       remoteBtn = document.createElement('button');
@@ -235,13 +394,14 @@
     toolbar.appendChild(localBtn);
 
     content.appendChild(closeBtn);
-    content.appendChild(mediaEl);
+    content.appendChild(viewport);
     if (tipEl) content.appendChild(tipEl);
     content.appendChild(toolbar);
     lb.appendChild(content);
 
     const keyHandler = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); hide(lb); }
+      if (e.key === 'Escape') { e.preventDefault(); hide(lb); return; }
+      if (zoomCtl?.handleKey(e.key)) { e.preventDefault(); return; }
       if (e.key === 'ArrowLeft') { e.preventDefault(); prevBtn.click(); }
       if (e.key === 'ArrowRight') { e.preventDefault(); nextBtn.click(); }
     };
@@ -249,7 +409,6 @@
     lb._keyHandler = keyHandler;
     document.addEventListener('keydown', keyHandler, true);
 
-    // Overlay click to close with short guard against the same-tap synthetic click
     const guardUntil = Date.now() + 350;
     lb._openGuardUntil = guardUntil;
     lb.onclick = (e) => {
@@ -261,6 +420,10 @@
   const hide = function (lb) {
     document.removeEventListener('keydown', lb._keyHandler, true);
     lb._keyHandler = null;
+    if (lb._blobUrl) {
+      try { URL.revokeObjectURL(lb._blobUrl); } catch {}
+      lb._blobUrl = null;
+    }
     lb.classList.add('hidden');
     lb.setAttribute('aria-hidden', 'true');
     lb.innerHTML = '';

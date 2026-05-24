@@ -1,4 +1,4 @@
-const { normalizePost, abs } = require('./base');
+const { normalizePost, abs, isVideoUrl } = require('./base');
 
 // e621/e926 adapter
 class E621Adapter {
@@ -28,6 +28,8 @@ class E621Adapter {
     const file = p?.file || {};
     const sample = p?.sample || {};
     const preview = p?.preview || {};
+    const fileUrl = file.url || sample.url || '';
+    const isVideo = /^video\//.test(String(file.ext || '')) || isVideoUrl(fileUrl);
     const src = Array.isArray(p?.sources) && p.sources.length > 0 ? p.sources[0] : p?.source || '';
     return normalizePost({
       id: p.id,
@@ -43,7 +45,9 @@ class E621Adapter {
       rating: p.rating || '',
       source: src,
       post_url: `${base}/posts/${p.id}`,
-      site: { name: site.name, type: site.type, baseUrl: site.baseUrl }
+      site: { name: site.name, type: site.type, baseUrl: site.baseUrl },
+      grid_video_url: isVideo ? abs(base, file.url || sample.url || '') : '',
+      is_video: isVideo
     });
   }
 

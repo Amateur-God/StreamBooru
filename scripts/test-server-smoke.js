@@ -42,6 +42,15 @@ async function main() {
     if (r.status !== 400) throw new Error(`expected 400, got ${r.status}`);
   });
 
+  await check('GET /mediaproxy rejects bad url', async () => {
+    const r = await fetchJson(`${base}/mediaproxy?url=https://evil.example/x.mp4`);
+    if (r.status === 404) {
+      console.log('skip: /mediaproxy not deployed on target server yet');
+      return;
+    }
+    if (r.status !== 400) throw new Error(`expected 400, got ${r.status}`);
+  });
+
   await check('GET /api/me without token returns 401', async () => {
     const r = await fetchJson(`${base}/api/me`);
     if (r.status !== 401) throw new Error(`expected 401, got ${r.status}`);
